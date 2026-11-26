@@ -19,6 +19,7 @@
 //!   below C3 hit drum sounds (General MIDI's map), notes from C3 up hum two octaves down.
 
 mod close_mic;
+pub mod texts;
 mod worker;
 
 use chimera::anatomy::human::{ArticKey, ArticPatch, BodyMix, HumanArtic, NEUTRAL};
@@ -36,6 +37,7 @@ use close_mic::CloseMic;
 use std::ffi::{CStr, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+use texts::{TextBank, Texts};
 use worker::{Hub, Lyrics, Request, Speech, TRASH_ROOM, Trash};
 
 /// The plugin's parameters, in the plugin's order (`src/CHIMERAMPC.cpp` declares the same list).
@@ -94,7 +96,11 @@ pub mod p {
     pub const PLAY_BEAT: usize = 50; // 0/1: the sequencer runs on its own tempo
     pub const STEP_1: usize = 51; // ..66: 0 rest, 1.. STEP_IDS
     pub const PAD: usize = 67; // momentary: 0 none, 1.. STEP_IDS
-    pub const COUNT: usize = 68;
+    // 68, 69: the screen's read-only displays (the C++ side's; the engine ignores them)
+    pub const TYPE_INTO: usize = 70; // 0 speech, 1 lyrics
+    pub const TYPE_SLOT: usize = 71; // 0..7
+    pub const KEY: usize = 72; // momentary: 0 none, then texts::TextBank::key's keys
+    pub const COUNT: usize = 73;
 }
 
 const MODE_SING: i32 = 0;
@@ -348,18 +354,27 @@ pub struct ChimeraMpc {
     following: bool,
     close_mic: CloseMic,
     face: Vec<HumanArtic>,
+    texts: Texts,
+    /// keys typed while the bank was locked, to type at the next block
+    pending_keys: [u8; 32],
+    n_pending: usize,
+    /// what the typed slot ends with, for the screen, and a serial that moves when it changes
+    preview: [u8; 64],
+    preview_len: usize,
+    preview_serial: u32,
+    preview_dirty: bool,
     failed: bool,
 }
 
 impl ChimeraMpc {
-    fn new(fs: f64, content: Option<String>) -> ChimeraMpc {
+    fn new(fs: f64, content: Option<String>, texts: Texts) -> ChimeraMpc {
         let mut engine = Engine::new(fs);
         let mut male = mpc_voice(fs, BODIES[0]);
         // the engine's own first voice (CHIMERA's default settings) is not used: freed here
         engine.install_voice(&mut male, BODIES[0]);
         drop(male);
         let hub = Hub::new();
-        worker::start(hub.clone(), fs, content);
+        worker::start(hub.clone(), fs, content, texts.clone());
         let mut e = ChimeraMpc {
             engine,
             fs,
@@ -399,6 +414,13 @@ impl ChimeraMpc {
             following: false,
             close_mic: CloseMic::new(fs),
             face: face_postures(),
+            texts,
+            pending_keys: [0; 32],
+            n_pending: 0,
+            preview: [0; 64],
+            preview_len: 0,
+            preview_serial: 0,
+            preview_dirty: true,
             failed: false,
         };
         e.apply_params();
@@ -463,16 +485,26 @@ impl ChimeraMpc {
         self.send_request();
         // what the worker has made
         let Ok(mut o) = self.hub.out.try_lock() else { return };
-        if self.lyrics.is_empty()
-            && let Some(l) = o.lyrics.take()
-        {
-            self.lyrics = l;
-            self.sung_slot = None;
-            self.applied[p::LYRICS] = f32::NAN;
-        }
+        let lyrics = o.lyrics.take();
         let speech = o.speech.take();
         let blend = o.blend.take();
         drop(o);
+        if let Some(mut l) = lyrics {
+            match self.sung_slot {
+                Some(s) if s < l.len() => {
+                    // the singer takes the slot's new syllables; its old ones go out
+                    let new = core::mem::take(&mut l[s]);
+                    let old = self.singer.set_syllables(new);
+                    self.trash(Trash::Syllables(old));
+                    self.singer.set_cursor(self.params[p::START_SYL].round().max(0.0) as usize);
+                }
+                _ => self.applied[p::LYRICS] = f32::NAN,
+            }
+            let old = core::mem::replace(&mut self.lyrics, l);
+            if !old.is_empty() {
+                self.trash(Trash::Lyrics(old));
+            }
+        }
         if let Some(s) = speech {
             if let Some(old) = self.speech.replace(s) {
                 self.trash(Trash::Speech(old));
@@ -722,7 +754,32 @@ impl ChimeraMpc {
         if changed(p::BREATHE) || changed(p::MODE) {
             self.update_gate();
         }
+        if changed(p::KEY) && q[p::KEY] >= 0.5 && self.n_pending < self.pending_keys.len() {
+            self.pending_keys[self.n_pending] = q[p::KEY].round() as u8;
+            self.n_pending += 1;
+        }
+        if changed(p::TYPE_INTO) || changed(p::TYPE_SLOT) {
+            self.preview_dirty = true;
+        }
         self.applied = q;
+        self.type_keys();
+    }
+
+    /// Type the keys waiting, and work out the preview again, if the bank is free.
+    fn type_keys(&mut self) {
+        if self.n_pending == 0 && !self.preview_dirty {
+            return;
+        }
+        let Ok(mut b) = self.texts.try_lock() else { return };
+        let (t, s) = ((self.params[p::TYPE_INTO].round().max(0.0) as usize).min(1), (self.params[p::TYPE_SLOT].round().max(0.0) as usize).min(SLOTS - 1));
+        for i in 0..self.n_pending {
+            b.key(t, s, self.pending_keys[i] as usize);
+        }
+        self.n_pending = 0;
+        self.preview_len = b.preview(t, s, &mut self.preview);
+        drop(b);
+        self.preview_dirty = false;
+        self.preview_serial = self.preview_serial.wrapping_add(1);
     }
 
     fn update_gate(&mut self) {
@@ -937,6 +994,10 @@ impl ChimeraMpc {
     fn render(&mut self, out: &mut [f32]) {
         self.talk_to_worker();
         self.apply_params();
+        if self.preview_serial == 0 || self.n_pending > 0 {
+            self.preview_dirty |= self.preview_serial == 0;
+            self.type_keys();
+        }
         if self.params[p::MPE].to_bits() != self.mpe_seen.to_bits() {
             self.mpe_seen = self.params[p::MPE];
             self.update_bend();
@@ -1062,17 +1123,104 @@ fn guarded(h: *mut ChimeraMpc, f: impl FnOnce(&mut ChimeraMpc)) {
     }
 }
 
-/// A new engine at this sample rate, or null. `content_dir` (or null) is the plugin's Content
-/// folder, with `lyrics.txt`, `speech.txt` and `cmudict.txt.gz`. Allocates and starts the
-/// engine's thread: call it outside the audio callback.
+/// The text bank for the words typed on the MPC (see `texts`): one per plugin, kept for its whole
+/// life and given to every engine it makes. Free it with `cm_texts_free` after the last engine.
 #[unsafe(no_mangle)]
-pub extern "C" fn cm_new(sample_rate: f64, content_dir: *const c_char) -> *mut ChimeraMpc {
+pub extern "C" fn cm_texts_new() -> *const TextBankHandle {
+    catch_unwind(|| Arc::into_raw(texts::new_bank()) as *const TextBankHandle).unwrap_or(std::ptr::null())
+}
+
+/// An opaque name for the text bank on the C side.
+pub struct TextBankHandle;
+
+fn bank_of(t: *const TextBankHandle) -> Option<Texts> {
+    if t.is_null() {
+        return None;
+    }
+    // SAFETY: from cm_texts_new and not yet freed: a new counted reference, the plugin's kept
+    let raw = t as *const std::sync::Mutex<TextBank>;
+    unsafe {
+        Arc::increment_strong_count(raw);
+        Some(Arc::from_raw(raw))
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_texts_free(t: *const TextBankHandle) {
+    if !t.is_null() {
+        // SAFETY: the plugin's own reference, given back once
+        let _ = catch_unwind(|| drop(unsafe { Arc::from_raw(t as *const std::sync::Mutex<TextBank>) }));
+    }
+}
+
+/// The typed texts for the project, into `out` (up to `cap` bytes); returns the bytes they need
+/// (call again with more room if that is more than `cap`). The host's thread (it may wait).
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_texts_save(t: *const TextBankHandle, out: *mut u8, cap: i32) -> i32 {
+    let Some(bank) = bank_of(t) else { return 0 };
+    catch_unwind(AssertUnwindSafe(|| {
+        let data = match bank.lock() {
+            Ok(b) => b.save(),
+            Err(e) => e.into_inner().save(),
+        };
+        if !out.is_null() && cap as usize >= data.len() {
+            // SAFETY: the caller gives room for cap bytes
+            unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out, data.len()) };
+        }
+        data.len() as i32
+    }))
+    .unwrap_or(0)
+}
+
+/// A project's typed texts (as cm_texts_save wrote them). Returns 1 if they were ours. The host's
+/// thread (it may wait); the engine plans them again after the usual pause.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_texts_load(t: *const TextBankHandle, data: *const u8, len: i32) -> i32 {
+    let Some(bank) = bank_of(t) else { return 0 };
+    if data.is_null() || len <= 0 {
+        return 0;
+    }
+    // SAFETY: the caller gives len bytes
+    let d = unsafe { std::slice::from_raw_parts(data, len as usize) };
+    catch_unwind(AssertUnwindSafe(|| match bank.lock() {
+        Ok(mut b) => b.load(d) as i32,
+        Err(e) => e.into_inner().load(d) as i32,
+    }))
+    .unwrap_or(0)
+}
+
+/// The preview of the slot being typed into (what it ends with, "_" for the cursor), into `out`
+/// as UTF-8 (NUL-terminated, up to `cap` bytes); returns a serial that moves whenever it changes.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_text_preview(h: *mut ChimeraMpc, out: *mut u8, cap: i32) -> u32 {
+    let mut serial = 0;
+    guarded(h, |e| {
+        serial = e.preview_serial;
+        if !out.is_null() && cap > 0 {
+            let n = e.preview_len.min(cap as usize - 1);
+            // SAFETY: the caller gives room for cap bytes
+            unsafe {
+                std::ptr::copy_nonoverlapping(e.preview.as_ptr(), out, n);
+                *out.add(n) = 0;
+            }
+        }
+    });
+    serial
+}
+
+/// A new engine at this sample rate, or null. `content_dir` (or null) is the plugin's Content
+/// folder, with `lyrics.txt`, `speech.txt` and `cmudict.txt.gz`; `texts` (or null) the plugin's
+/// text bank (cm_texts_new). Allocates and starts the engine's thread: call it outside the audio
+/// callback.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_new(sample_rate: f64, content_dir: *const c_char, texts: *const TextBankHandle) -> *mut ChimeraMpc {
     if !(sample_rate.is_finite() && sample_rate > 8000.0) {
         return std::ptr::null_mut();
     }
     // SAFETY: a NUL-terminated string from the plugin, or null
     let content = (!content_dir.is_null()).then(|| unsafe { CStr::from_ptr(content_dir) }.to_string_lossy().into_owned());
-    catch_unwind(AssertUnwindSafe(|| Box::into_raw(Box::new(ChimeraMpc::new(sample_rate, content))))).unwrap_or(std::ptr::null_mut())
+    let bank = bank_of(texts).unwrap_or_else(texts::new_bank);
+    catch_unwind(AssertUnwindSafe(|| Box::into_raw(Box::new(ChimeraMpc::new(sample_rate, content, bank))))).unwrap_or(std::ptr::null_mut())
 }
 
 /// Frees an engine from cm_new (null is fine). Call it outside the audio callback.
@@ -1153,6 +1301,16 @@ pub extern "C" fn cm_beat_preset(index: i32, steps16: *mut f32, bpm: *mut f32, s
         }
         _ => 0,
     }
+}
+
+/// After a state load: the momentary controls' values as they now stand do not act.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_settle(h: *mut ChimeraMpc) {
+    guarded(h, |e| {
+        for i in [p::SPEAK, p::CONSONANT, p::PAD, p::KEY] {
+            e.applied[i] = e.params[i];
+        }
+    });
 }
 
 /// A raw MIDI message: status (with its channel) and two data bytes. Notes, pitch bend, channel

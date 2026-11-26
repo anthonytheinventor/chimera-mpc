@@ -4,7 +4,12 @@
 //! spoken lines (again when the speech rate or the IPA switch changes), builds a voice for a
 //! blended body (when the Blend mix changes), and frees whatever the audio thread hands back.
 //! The audio thread only ever `try_lock`s the hub, so it never waits for this thread.
+//!
+//! The texts come from the text bank (`texts`): filled from Content/lyrics.txt and speech.txt at
+//! the start (slots a project has typed into keep theirs), and planned again whenever the typing
+//! in a target has paused for TYPING_PAUSE.
 
+use crate::texts::{TARGET_LYRICS, TARGET_SPEECH, Texts};
 use crate::{BODIES, DEFAULT_LYRICS, SLOTS, mpc_voice};
 use chimera::anatomy::human::BodyMix;
 use chimera::control::score::Gesture;
@@ -22,7 +27,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// How long the typing in a target must pause before its texts are planned again.
+const TYPING_PAUSE: Duration = Duration::from_millis(400);
 
 /// Each slot's lyrics as the Singer holds them.
 pub type Lyrics = Vec<Vec<LiveSyllable>>;
@@ -52,6 +60,8 @@ pub struct Request {
 pub enum Trash {
     Voice(#[allow(dead_code)] Box<HumanVoice>),
     Speech(#[allow(dead_code)] Speech),
+    Lyrics(#[allow(dead_code)] Lyrics),
+    Syllables(#[allow(dead_code)] Vec<LiveSyllable>),
 }
 
 #[derive(Default)]
@@ -78,9 +88,9 @@ impl Hub {
     }
 }
 
-pub fn start(hub: Arc<Hub>, fs: f64, content: Option<String>) {
+pub fn start(hub: Arc<Hub>, fs: f64, content: Option<String>, texts: Texts) {
     let _ = std::thread::Builder::new().name("chimera-worker".into()).spawn(move || {
-        let _ = catch_unwind(AssertUnwindSafe(|| run(&hub, fs, content.as_deref())));
+        let _ = catch_unwind(AssertUnwindSafe(|| run(&hub, fs, content.as_deref(), &texts)));
     });
 }
 
@@ -153,6 +163,31 @@ fn plan_pad(ipa: &str, body: BodyMix, rate: f64) -> Vec<Gesture> {
     plan_line(&[Phrase { segments: tokenize_ipa(ipa), intonation: Intonation::Flat, pause: 0.25, words: Vec::new() }], body, rate)
 }
 
+/// The bank's texts of one target, as the planners take them: lyrics one string a slot, speech a
+/// list of lines a slot (a slot with no words says CHIMERA's default).
+fn bank_texts(texts: &Texts, target: usize) -> (Vec<String>, u64) {
+    let b = match texts.lock() {
+        Ok(b) => b,
+        Err(p) => p.into_inner(),
+    };
+    let strings = b.slots[target].iter().map(|s| s.as_str().to_string()).collect();
+    (strings, b.generation[target])
+}
+
+fn speech_lines(slots: &[String]) -> Vec<Vec<String>> {
+    slots
+        .iter()
+        .map(|t| {
+            let lines: Vec<String> = t.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect();
+            if lines.is_empty() { vec!["Hello.".to_string()] } else { lines }
+        })
+        .collect()
+}
+
+fn plan_lyrics(slots: &[String], g2p: &EnglishG2P) -> Lyrics {
+    slots.iter().map(|t| syllables_from(&lyrics_to_syllables(if t.trim().is_empty() { DEFAULT_LYRICS } else { t }, g2p))).collect()
+}
+
 fn plan_speech(slots: &[Vec<String>], g2p: &EnglishG2P, rate: f64, ipa: bool) -> Speech {
     let pads = CONSONANTS
         .iter()
@@ -175,16 +210,69 @@ fn plan_speech(slots: &[Vec<String>], g2p: &EnglishG2P, rate: f64, ipa: bool) ->
     Speech { lines, pads }
 }
 
-fn run(hub: &Hub, fs: f64, content: Option<&str>) {
-    let g2p = load_g2p(content);
-    let lyrics: Lyrics = lyric_slots(&read_text(content, "lyrics.txt")).iter().map(|t| syllables_from(&lyrics_to_syllables(t, &g2p))).collect();
-    if let Ok(mut o) = hub.out.lock() {
-        o.lyrics = Some(lyrics);
+fn run(hub: &Hub, fs: f64, content: Option<&str>, texts: &Texts) {
+    // the text files fill the slots no project has typed into (once per plugin: the bank outlives
+    // engines)
+    if let Ok(mut b) = texts.lock()
+        && !b.filled
+    {
+        let lyrics = lyric_slots(&read_text(content, "lyrics.txt"));
+        let speech = speech_slots(&read_text(content, "speech.txt"));
+        for s in 0..SLOTS {
+            b.original[TARGET_LYRICS][s].set(&lyrics[s]);
+            b.original[TARGET_SPEECH][s].set(&speech[s].join("\n"));
+            if !b.edited[TARGET_LYRICS][s] {
+                b.slots[TARGET_LYRICS][s] = b.original[TARGET_LYRICS][s];
+            }
+            if !b.edited[TARGET_SPEECH][s] {
+                b.slots[TARGET_SPEECH][s] = b.original[TARGET_SPEECH][s];
+            }
+        }
+        b.filled = true;
     }
-    let speech_text = speech_slots(&read_text(content, "speech.txt"));
+    let g2p = load_g2p(content);
+    let (lyric_text, mut lyrics_gen) = bank_texts(texts, TARGET_LYRICS);
+    if let Ok(mut o) = hub.out.lock() {
+        o.lyrics = Some(plan_lyrics(&lyric_text, &g2p));
+    }
+    let (speech_text, mut speech_gen) = bank_texts(texts, TARGET_SPEECH);
+    let mut speech_text = speech_lines(&speech_text);
     let mut built_speech: Option<(f32, bool)> = None;
     let mut built_blend: Option<(f32, f32)> = None;
+    let mut typed_at: [Option<Instant>; 2] = [None, None];
     while !hub.quit.load(Ordering::Relaxed) {
+        // typing: plan a target again once its texts have stopped changing for a moment
+        let gens = texts.lock().map(|b| b.generation).unwrap_or([lyrics_gen, speech_gen]);
+        let now = Instant::now();
+        for t in [TARGET_SPEECH, TARGET_LYRICS] {
+            let seen = if t == TARGET_SPEECH { speech_gen } else { lyrics_gen };
+            if gens[t] != seen {
+                let at = *typed_at[t].get_or_insert(now);
+                if now.duration_since(at) < TYPING_PAUSE {
+                    continue;
+                }
+                let (strings, g) = bank_texts(texts, t);
+                // still moving: wait for it to rest
+                if g != gens[t] {
+                    typed_at[t] = Some(now);
+                    continue;
+                }
+                typed_at[t] = None;
+                if t == TARGET_SPEECH {
+                    speech_gen = g;
+                    speech_text = speech_lines(&strings);
+                    built_speech = None;
+                } else {
+                    lyrics_gen = g;
+                    let l = plan_lyrics(&strings, &g2p);
+                    if let Ok(mut o) = hub.out.lock() {
+                        o.lyrics = Some(l);
+                    }
+                }
+            } else {
+                typed_at[t] = None;
+            }
+        }
         let req = hub.request.lock().ok().and_then(|r| *r);
         if let Some(r) = req {
             if built_speech != Some((r.speech_rate, r.ipa)) {

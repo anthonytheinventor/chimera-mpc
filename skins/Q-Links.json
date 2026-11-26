@@ -169,6 +169,29 @@
                 }
             },
             {
+                "Tab": 6,
+                "SubTab": 1,
+                "Bank Direction": "Column",
+                "Q-Links": {
+                    "Q-Link 1": 42,
+                    "Q-Link 2": 0,
+                    "Q-Link 3": -1,
+                    "Q-Link 4": -1,
+                    "Q-Link 5": 38,
+                    "Q-Link 6": 41,
+                    "Q-Link 7": -1,
+                    "Q-Link 8": -1,
+                    "Q-Link 9": 71,
+                    "Q-Link 10": 39,
+                    "Q-Link 11": -1,
+                    "Q-Link 12": -1,
+                    "Q-Link 13": 70,
+                    "Q-Link 14": 40,
+                    "Q-Link 15": -1,
+                    "Q-Link 16": -1
+                }
+            },
+            {
                 "Tab": 5,
                 "SubTab": 1,
                 "Bank Direction": "Column",

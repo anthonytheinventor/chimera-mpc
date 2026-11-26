@@ -8,15 +8,27 @@
 #ifndef CHIMERA_MPC_H
 #define CHIMERA_MPC_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct ChimeraMpc ChimeraMpc;
 
-// content_dir: the plugin's Content folder (lyrics.txt, speech.txt, cmudict.txt.gz), or null.
-// Starts the engine's own thread.
-ChimeraMpc* cm_new(double sample_rate, const char* content_dir);
+// content_dir: the plugin's Content folder (lyrics.txt, speech.txt, cmudict.txt.gz), or null;
+// texts: the plugin's text bank (cm_texts_new), or null. Starts the engine's own thread.
+ChimeraMpc* cm_new(double sample_rate, const char* content_dir, const void* texts);
+
+// The text bank for the words typed on the MPC: one per plugin, given to every engine it makes;
+// freed after the last engine. Save and load are for the host's thread (they may wait).
+const void* cm_texts_new(void);
+void cm_texts_free(const void* texts);
+int cm_texts_save(const void* texts, uint8_t* out, int cap);
+int cm_texts_load(const void* texts, const uint8_t* data, int len);
+// The typed slot's end ("_" for the cursor) into out (NUL-terminated); returns a serial that
+// moves whenever it changes. The audio thread.
+uint32_t cm_text_preview(ChimeraMpc* engine, uint8_t* out, int cap);
 void cm_free(ChimeraMpc* engine);
 
 // The engine's parameter defaults in parameter order (n values at most); returns its count.
@@ -35,6 +47,9 @@ void cm_transport(ChimeraMpc* engine, int playing, int bpm_valid, double bpm, in
 
 // A raw MIDI message: status (with its channel) and two data bytes.
 void cm_midi(ChimeraMpc* engine, int status, int d1, int d2);
+// After a state load: the momentary controls' values (Speak, Consonant, Pad, Key) as they now
+// stand do not act; only a later change does.
+void cm_settle(ChimeraMpc* engine);
 void cm_note_on(ChimeraMpc* engine, int note, int velocity);
 void cm_note_off(ChimeraMpc* engine, int note);
 void cm_all_notes_off(ChimeraMpc* engine);

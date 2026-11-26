@@ -42,7 +42,7 @@ struct Rig {
 impl Rig {
     fn new() -> Rig {
         let dir = CString::new(content_dir()).unwrap();
-        let h = cm_new(FS, dir.as_ptr());
+        let h = cm_new(FS, dir.as_ptr(), std::ptr::null());
         assert!(!h.is_null());
         let mut params = vec![0.0f32; p::COUNT];
         cm_param_defaults(params.as_mut_ptr(), p::COUNT as i32);
@@ -350,4 +350,76 @@ fn mpe_bends_a_note_on_its_own_channel_and_pressure_breathes_harder() {
     assert!((wheel / plain - 2f64.powf(0.5 / 12.0)).abs() < 0.02);
     cm_midi(r.h, 0x82, 57, 0);
     write_wav("mpe.wav", &r.out);
+}
+
+/// The step of the Key parameter that types this character (as the plugin's keyboard numbers them).
+fn key_of(c: char) -> f32 {
+    match c {
+        'a'..='z' => (c as u8 - b'a' + 1) as f32,
+        ' ' => 27.0,
+        '.' => 28.0,
+        ',' => 29.0,
+        '?' => 30.0,
+        '!' => 31.0,
+        '\'' => 32.0,
+        '/' => 34.0, // Line
+        _ => 0.0,
+    }
+}
+
+#[test]
+fn typed_words_are_shown_and_spoken() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 2.0);
+    r.wait_for_lyrics();
+    // type into speech slot 4: clear it, then two lines
+    r.set(p::TYPE_INTO, 0.0);
+    r.set(p::TYPE_SLOT, 3.0);
+    r.set(p::KEY, 35.0); // Clear
+    r.render(0.01);
+    r.set(p::KEY, 0.0);
+    r.render(0.01);
+    for c in "hi there/bye".chars() {
+        r.set(p::KEY, key_of(c));
+        r.render(0.006);
+        r.set(p::KEY, 0.0);
+        r.render(0.006);
+    }
+    let mut buf = [0u8; 64];
+    cm_text_preview(r.h, buf.as_mut_ptr(), 64);
+    let shown = std::ffi::CStr::from_bytes_until_nul(&buf).unwrap().to_str().unwrap().to_string();
+    println!("typed: {shown:?}");
+    assert_eq!(shown, "hi there/bye_");
+    // Del takes the last letter away
+    r.set(p::KEY, 33.0);
+    r.render(0.01);
+    r.set(p::KEY, 0.0);
+    r.render(0.01);
+    cm_text_preview(r.h, buf.as_mut_ptr(), 64);
+    assert_eq!(std::ffi::CStr::from_bytes_until_nul(&buf).unwrap().to_str().unwrap(), "hi there/by_");
+    // after the pause the slot is planned again: speak it (slot 4, from its first line)
+    r.render(0.8);
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    r.render(0.2);
+    r.set(p::SPEECH, 3.0);
+    r.render(0.05);
+    r.out.clear();
+    cm_note_on(r.h, 60, 100);
+    r.render(0.1);
+    cm_note_off(r.h, 60);
+    r.render(1.4);
+    assert!(rms(&r.out) > 0.005, "silent: {}", rms(&r.out));
+    write_wav("typed_hi_there.wav", &r.out);
+}
+
+#[test]
+fn typed_texts_survive_a_save_and_load() {
+    let bank = cm_texts_new();
+    let data = b"CMT1\x00\x02\x05\x00hello";
+    assert_eq!(cm_texts_load(bank, data.as_ptr(), data.len() as i32), 1);
+    let n = cm_texts_save(bank, std::ptr::null_mut(), 0);
+    let mut out = vec![0u8; n as usize];
+    assert_eq!(cm_texts_save(bank, out.as_mut_ptr(), n), n);
+    assert_eq!(&out, data);
+    cm_texts_free(bank);
 }

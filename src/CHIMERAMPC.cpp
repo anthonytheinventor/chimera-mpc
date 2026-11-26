@@ -103,8 +103,17 @@ enum ParamIndex
     // read-only displays for the skin (not automatable; the helper thread writes them)
     kVisFace = kNumSettings,   // the face strip's frame (the nearest mouth posture)
     kVisVelum,                 // the soft palate strip's frame
+    // typing words on the MPC
+    kTypeInto,                 // Speech / Lyrics: which texts the keys edit
+    kTypeSlot,                 // 1..8: which slot
+    kKey,                      // one key (on a change to it): the letters, punctuation, Del, Line, Clear
+    kTyped,                    // read-only: its text is the end of the slot being typed (formatValue)
     kNumParams
 };
+
+constexpr int kEngineParams = kKey + 1;   // the engine reads 0..kKey (engine/src/lib.rs, module p)
+
+bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped; }
 
 constexpr int kFaceFrames = 33;    // engine/src/lib.rs face_postures()
 constexpr int kVelumFrames = 8;    // engine/src/lib.rs VELUM_FRAMES
@@ -201,6 +210,20 @@ public:
         addParam(face);
         addParam(velum);
 
+        addParam(mpc::choiceParam("type_into", "Type Into", {"Speech", "Lyrics"}, 0));
+        addParam(mpc::choiceParam("type_slot", "Type Slot", {"1", "2", "3", "4", "5", "6", "7", "8"}, 0));
+        std::vector<std::string> keys = {"-"};
+        for (char c = 'A'; c <= 'Z'; ++c) keys.push_back(std::string(1, c));
+        for (const char* k : {"Space", ".", ",", "?", "!", "'", "Del", "Line", "Clear"}) keys.push_back(k);
+        // typing is taps on the screen: never recorded as automation
+        mpc::Param key = mpc::choiceParam("key", "Key", keys, 0);
+        key.automatable = false;
+        addParam(key);
+        mpc::Param typed = mpc::intParam("typed", "Typed", 0, 1023, 0);
+        typed.automatable = false;
+        addParam(typed);
+        texts_ = cm_texts_new();
+
         // The helper thread puts the face on the screen (see notifierMain). Without it the plugin
         // still plays; the face then stands still.
         try { notifier_ = std::thread(&CHIMERAMPC::notifierMain, this); }
@@ -217,6 +240,32 @@ public:
         quitCv_.notify_all();
         if (notifier_.joinable()) notifier_.join();
         cm_free(engine_.exchange(nullptr));
+        cm_texts_free(texts_);
+    }
+
+    // The typed slot's end, as the Typed parameter's text (the host's thread).
+    bool formatValue(int index, float plainValue, std::string& out) override
+    {
+        (void)plainValue;
+        if (index != kTyped) return false;
+        char buf[64];
+        readPreview(buf, sizeof buf);
+        out = buf;
+        return true;
+    }
+
+    // The typed words go with the project (the host's thread).
+    void saveExtraState(std::vector<uint8_t>& out) override
+    {
+        const int n = cm_texts_save(texts_, nullptr, 0);
+        if (n <= 0) return;
+        out.resize((size_t)n);
+        cm_texts_save(texts_, out.data(), n);
+    }
+
+    void loadExtraState(const uint8_t* data, size_t size) override
+    {
+        cm_texts_load(texts_, data, (int)size);
     }
 
     // Allocates the engine (outside the audio callback). A new one only when the rate changes.
@@ -225,7 +274,7 @@ public:
         (void)maxBlockSize;
         if (engine_.load() != nullptr && sampleRate == engineRate_) return;
         const std::string content = mpc::contentFolder();
-        ChimeraMpc* fresh = cm_new(sampleRate, content.empty() ? nullptr : content.c_str());
+        ChimeraMpc* fresh = cm_new(sampleRate, content.empty() ? nullptr : content.c_str(), texts_);
         engineRate_ = sampleRate;
         ChimeraMpc* old = engine_.exchange(fresh);
         // free the old engine only once process() is not using it
@@ -238,6 +287,8 @@ public:
     void reset() override
     {
         allOff_.store(true, std::memory_order_release);
+        // a loaded state or program must not act as a tap on the momentary controls (process)
+        settle_.store(true, std::memory_order_release);
         smoothedGain_ = dbToGain(get(kGain));
         padSeen_ = false;
         beatSeen_ = false;
@@ -260,12 +311,13 @@ public:
         cm_transport(e, t.playing ? 1 : 0, t.tempoValid ? 1 : 0, t.bpm, t.ppqValid ? 1 : 0, t.ppqPos, ctx.numFrames);
 
         // the parameters, in the engine's units (it applies only what changed)
-        float v[kNumSettings];
-        for (int i = 0; i < kNumSettings; ++i) v[i] = get(i);
+        float v[kEngineParams];
+        for (int i = 0; i < kEngineParams; ++i) v[i] = get(i);
         for (int i : {kPressed, kBright, kBreathy, kRough, kFry, kRing, kBodyFemale, kBodyChild, kRounding, kTipCurl, kTwang, kFalseFolds, kVowelFront, kVowelOpen, kSwing})
             v[i] *= 0.01f;
         v[kGlide] *= 0.001f;
-        cm_set_params(e, v, kNumSettings);
+        cm_set_params(e, v, kEngineParams);
+        if (settle_.exchange(false, std::memory_order_acq_rel)) cm_settle(e);
         const float targetGain = dbToGain(get(kGain));
 
         const int numFrames = ctx.numFrames;
@@ -293,6 +345,13 @@ public:
                 frame += n;
             }
         }
+        char preview[64];
+        const uint32_t serial = cm_text_preview(e, (uint8_t*)preview, sizeof preview);
+        if (serial != previewSerialSeen_)
+        {
+            previewSerialSeen_ = serial;
+            writePreview(preview);
+        }
         int shown[2] = {0, 0};
         cm_display(e, shown);
         faceFrame_.store(shown[0], std::memory_order_relaxed);
@@ -302,6 +361,41 @@ public:
     }
 
 private:
+    // The preview text crosses from the audio thread to the host's: a sequence lock (the writer
+    // never waits; a reader that catches a write in progress reads again).
+    void writePreview(const char* text)
+    {
+        previewSeq_.fetch_add(1, std::memory_order_acq_rel);   // odd: writing
+        std::atomic_thread_fence(std::memory_order_release);
+        for (size_t i = 0; i < sizeof previewBuf_; ++i)
+        {
+            previewBuf_[i].store(text[i], std::memory_order_relaxed);
+            if (text[i] == 0) break;
+        }
+        std::atomic_thread_fence(std::memory_order_release);
+        previewSeq_.fetch_add(1, std::memory_order_release);   // even: done
+        previewWrites_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void readPreview(char* out, size_t cap)
+    {
+        for (int tries = 0; tries < 100; ++tries)
+        {
+            const uint32_t a = previewSeq_.load(std::memory_order_acquire);
+            if (a & 1u) { std::this_thread::yield(); continue; }
+            size_t i = 0;
+            for (; i + 1 < cap && i < sizeof previewBuf_; ++i)
+            {
+                out[i] = previewBuf_[i].load(std::memory_order_relaxed);
+                if (out[i] == 0) break;
+            }
+            out[i < cap ? i : cap - 1] = 0;
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (previewSeq_.load(std::memory_order_relaxed) == a) return;
+        }
+        out[0] = 0;
+    }
+
     // The helper thread: every 50 ms it moves the face's display parameters to what the voice is
     // doing and reports the ones that changed, so the screen's film strips follow. While a
     // setting is moving (a Q-Link, the screen, the data wheel) it writes them without reporting
@@ -310,9 +404,9 @@ private:
     // suspended or is closing the plugin), and stops at once when the plugin closes.
     void notifierMain()
     {
-        float seen[kNumSettings];
-        for (int i = 0; i < kNumSettings; ++i) seen[i] = get(i);
-        int lastFace = -1, lastVelum = -1, knobLooks = 0, idleLooks = 0;
+        float seen[kNumParams];
+        for (int i = 0; i < kNumParams; ++i) seen[i] = get(i);
+        int lastFace = -1, lastVelum = -1, lastTyped = -1, knobLooks = 0, idleLooks = 0;
         uint32_t lastProcessed = 0;
         for (;;)
         {
@@ -326,8 +420,10 @@ private:
             if (idleLooks > 3) continue;   // no audio for 200 ms: say nothing to the host
 
             bool moved = false;
-            for (int i = 0; i < kNumSettings; ++i)
+            for (int i = 0; i < kNumParams; ++i)
             {
+                // displays and the keyboard's taps are not knob sweeps
+                if (isDisplay(i) || i == kKey) continue;
                 const float x = get(i);
                 if (x != seen[i]) { moved = true; seen[i] = x; }
             }
@@ -343,6 +439,16 @@ private:
             };
             show(kVisFace, faceFrame_.load(std::memory_order_relaxed), kFaceFrames, lastFace);
             show(kVisVelum, velumFrame_.load(std::memory_order_relaxed), kVelumFrames, lastVelum);
+            // the typed text: its value moves so the host reads the new text (a report alone does
+            // not refresh a text whose value stayed the same); reported even while knobs move, as
+            // typing is taps
+            const int typed = (int)(previewWrites_.load(std::memory_order_relaxed) % 1024u);
+            if (typed != lastTyped)
+            {
+                lastTyped = typed;
+                setNormalised(kTyped, (float)typed / 1023.0f);
+                notifyHostParameterChanged(kTyped);
+            }
         }
     }
 
@@ -415,7 +521,12 @@ private:
     std::atomic<ChimeraMpc*> engine_{nullptr};
     std::atomic<bool> inProcess_{false};
     std::atomic<bool> allOff_{false};
+    std::atomic<bool> settle_{false};
     std::atomic<int> faceFrame_{0}, velumFrame_{0};
+    const void* texts_ = nullptr;
+    std::atomic<char> previewBuf_[64] = {};
+    std::atomic<uint32_t> previewSeq_{0}, previewWrites_{0};
+    uint32_t previewSerialSeen_ = 0;
     std::atomic<uint32_t> processed_{0};
     std::thread notifier_;
     std::atomic<bool> quit_{false};

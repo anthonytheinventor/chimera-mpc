@@ -123,11 +123,15 @@ PAGES = [
     {"name": "KIT", "fn": 3, "sub": 1, "center": "pads", "mode": 3,
      "cols": [("BEAT", ["Beat", "Tempo", "Swing", "Mic FX"]), ("HUM VOICE", ["Breath", "Pressed", "Bright", "Glide"]),
               ("TRANSPORT", ["Follow Host", "Play Beat", "Gain", None]), ("", [None, None, None, None])]},
+    {"name": "TYPE", "fn": 5, "sub": 0, "center": "keys", "mode": 2,
+     "cols": [("TYPE", ["Type Into", "Type Slot", "Speech", "Speak"]), ("SPEAK", ["Speech Rate", "Start Line", "IPA", "Gain"]),
+              ("", [None, None, None, None]), ("", [None, None, None, None])]},
     {"name": "BODY", "fn": 4, "sub": 0, "center": "body", "mode": None,
      "cols": [("BODY", ["Body", "Female", "Child", "Gain"]), ("SETUP", ["MPE", "Restart", "Whisper", "Breathe"]),
               ("", [None, None, None, None]), ("", [None, None, None, None])]},
 ]
 BIPOLAR = {"Larynx", "Tongue Root"}
+MOMENTARY = {"Speak"}      # back to off when the finger lifts: each tap acts once
 MODES = ["SING", "PLAY", "SPEAK", "BEATBOX"]
 BODIES = ["MALE", "FEMALE", "CHILD", "BLEND"]
 PADS = [("KICK", "B"), ("HAT", "t"), ("SNARE", "Pf"), ("RIM", "K"), ("INWARD", "^K"),
@@ -141,6 +145,27 @@ VOWEL_CHART = [("i", 342, 2322), ("ɪ", 427, 2034), ("e", 476, 2089), ("ɛ", 580
                ("u", 378, 997), ("ʌ", 623, 1200), ("ə", 500, 1450)]
 F1_RANGE, F2_RANGE = (230.0, 950.0), (700.0, 2700.0)
 VOWEL_BOX = (424, 70, 432, 360)
+# the keyboard: rows of (label, Key step); the Key parameter's steps are "-", A..Z, Space, . , ? ! ',
+# Del, Line, Clear
+KEY_ROWS = [[(c, ord(c) - 64) for c in "QWERTYUIOP"], [(c, ord(c) - 64) for c in "ASDFGHJKL"] + [("'", 32)],
+            [(c, ord(c) - 64) for c in "ZXCVBNM"] + [(".", 28), (",", 29), ("?", 30)],
+            [("!", 31), ("SPACE", 27), ("DEL", 33), ("LINE", 34), ("CLEAR", 35)]]
+KEY_W, KEY_H, KEY_GAP = 42, 52, 4
+KEYS_TOP = 150
+
+
+def key_positions():
+    """(label, step, x, y, w) for every key, rows centered in the middle screen"""
+    out = []
+    for r, row in enumerate(KEY_ROWS):
+        widths = [KEY_W * (3 if lab == "SPACE" else 2 if len(lab) > 1 else 1) + (KEY_GAP * (2 if lab == "SPACE" else 1) if len(lab) > 1 else 0) for lab, _ in row]
+        total = sum(widths) + KEY_GAP * (len(row) - 1)
+        x = CENTER[0] + (CENTER[2] - CENTER[0] - total) // 2
+        y = KEYS_TOP + r * (KEY_H + KEY_GAP)
+        for (lab, step), w in zip(row, widths):
+            out.append((lab, step, x, y, w))
+            x += w + KEY_GAP
+    return out
 
 
 # --------------------------------------------------------------------------------------------
@@ -344,6 +369,9 @@ def make_overlays(page, face, mouth_box):
     if kind == "pads":
         out.append(("cap_pads1.png", None, (CENTER[0] + 70, 530)))
         out.append(("cap_pads2.png", None, (CENTER[0] + 50, 556)))
+    if kind == "keys":
+        out.append(("typed_frame.png", None, (CENTER[0] + 8, 56)))
+        out.append(("cap_keys.png", None, (CENTER[0] + 40, 380)))
     if kind == "body":
         out.append(("cap_title.png", None, (CENTER[0] + 110, 260)))
         out.append(("cap_body1.png", None, (CENTER[0] + 40, 330)))
@@ -385,6 +413,10 @@ def make_shared_images(face, mouth_box):
     chart.alpha_composite(text_layer((w, h + 40), (w / 2, h + 20), "LEFT: FRONT    DOWN: OPEN", hershey(14), QUIET, anchor="mm", blur=1.0))
     im["vowel_chart.png"] = chart
     im["cap_sounds.png"] = caption_image("A CONSONANT BETWEEN TWO VOWELS", 15, LABEL)
+    tf = Image.new("RGBA", (CENTER[2] - CENTER[0] - 16, 68), (0, 0, 0, 0))
+    frame_rect(ImageDraw.Draw(tf), (0, 0, tf.width - 1, tf.height - 1), FRAME)
+    im["typed_frame.png"] = tf
+    im["cap_keys.png"] = caption_image("LINE: WHAT THE NEXT NOTE SAYS", 14, QUIET)
     im["cap_pads1.png"] = caption_image("PADS: GM DRUM NOTES 35-59", 14, QUIET)
     im["cap_pads2.png"] = caption_image("C3 AND UP HUM TWO OCTAVES DOWN", 14, QUIET)
     im["cap_title.png"] = caption_image("CHIMERA MPC", 40, BLUE, blur=2.0)
@@ -480,8 +512,9 @@ def build_tui(params, face_frames, mouth_box, velum_box, n_velum):
 
     def control(children, p, defname, bounds):
         referenced[p.index] = p
+        handle = ("ResetOnGestureEnd/" + p.handle) if p.name in MOMENTARY else p.handle
         children.append(G.entry(p.name, defname, G.obj(("version", 1), ("handleName", "Data")), bounds,
-                                "Yes", "Hide", "Always", remap=[("Data", p.handle)]))
+                                "Yes", "Hide", "Always", remap=[("Data", handle)]))
 
     def radio_group(children, p, files, positions, momentary=False, first=0):
         """buttons for the steps first.. of p (p's choices are the group's steps)"""
@@ -528,6 +561,19 @@ def build_tui(params, face_frames, mouth_box, velum_box, n_velum):
                         pos, momentary=True, first=1)
             radio_group(children, params["Pad Vowel"], [("pv_%d_on.png" % k, "pv_%d_off.png" % k) for k in range(4)],
                         chips(PAD_VOWELS, CENTER[0] + 16, 420, (106, 40)))
+        if kind == "keys":
+            kp = params["Key"]
+            referenced[kp.index] = kp
+            n = len(kp.choices)
+            for lab, step, x, y, w in key_positions():
+                on, off = "key_%d_on.png" % step, "key_%d_off.png" % step
+                name = need("chimRadio Key %d" % step, lambda on=on, off=off, step=step: radio_def(on, off, step, n))
+                children.append(G.entry("key %d" % step, name, G.obj(("version", 1), ("handleName", "Data")),
+                                        "%d %d %d %d" % (x, y, w, KEY_H), "No", "Hide", "Always", remap=[("Data", "ResetOnGestureEnd/" + kp.handle)]))
+            tp = params["Typed"]
+            referenced[tp.index] = tp
+            children.append(G.entry("typed", "Label", label_data("Value", argb(WHITE), 28.0, "centred"),
+                                    "%d 62 %d 56" % (CENTER[0] + 10, CENTER[2] - CENTER[0] - 20), "No", "Show", "Always", remap=[("Data", tp.handle)]))
         if kind == "pads":
             pos = [(CENTER[0] + 22 + (k % 2) * 220, 60 + (k // 2) * 92) for k in range(len(PADS))]
             radio_group(children, params["Pad"], [("pad_%d_on.png" % k, "pad_%d_off.png" % k) for k in range(1, len(PADS) + 1)],
@@ -661,6 +707,9 @@ def main():
         for k, lab in enumerate(labels):
             for on in (True, False):
                 images["%s_%d_%s.png" % (prefix, k + 1, "on" if on else "off")] = keycap(size, lab, color, on, 26 if prefix == "cons" else 18)
+    for lab, step, x, y, w in key_positions():
+        for on in (True, False):
+            images["key_%d_%s.png" % (step, "on" if on else "off")] = keycap((w, KEY_H), lab, BLUE if len(lab) == 1 else AMBER, on, 22 if len(lab) == 1 else 15)
     for k, v in enumerate(PAD_VOWELS):
         for on in (True, False):
             images["pv_%d_%s.png" % (k, "on" if on else "off")] = keycap((106, 40), v, SLOTS[k], on, 22)
@@ -707,6 +756,10 @@ def main():
                 img.alpha_composite(images["cons_%d_off.png" % (k + 1)], (CENTER[0] + 22 + (k % 5) * 88, 84 + (k // 5) * 62))
             for k, (x, y) in enumerate(chips(PAD_VOWELS, CENTER[0] + 16, 420, (106, 40))):
                 img.alpha_composite(images["pv_%d_%s.png" % (k, "on" if k == 0 else "off")], (x, y))
+        if page["center"] == "keys":
+            for lab, step, x, y, w in key_positions():
+                img.alpha_composite(images["key_%d_off.png" % step], (x, y))
+            ImageDraw.Draw(img).text((CENTER[0] + 236, 90), "hello. can you hear me?_", font=roboto(28), fill=WHITE + (255,), anchor="mm")
         if page["center"] == "pads":
             for k in range(len(PADS)):
                 img.alpha_composite(images["pad_%d_off.png" % (k + 1)], (CENTER[0] + 22 + (k % 2) * 220, 60 + (k // 2) * 92))

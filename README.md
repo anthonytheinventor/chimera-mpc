@@ -35,6 +35,12 @@ CHIMERA MPC is an independent project, not made or endorsed by Jameson Hodge.
 With **Restart** on, Sing and Speak start again from Start Syl and Start Line each time the MPC's
 transport starts.
 
+**Typing your own words**: on the TYPE page, pick **Type Into** (Speech or Lyrics) and **Type Slot**
+(1 to 8), then type on the keyboard. **Del** takes the last character back, **Clear** empties the slot,
+and in Speech **Line** starts a new line: each note says the next line. The slot starts with the line
+from the text file; what you type replaces it and is saved with the project. A moment after you stop
+typing, the next note says (or sings) the new words; **Speak** says the next line without a key.
+
 The pitch wheel bends ±2 semitones, and channel or key pressure (aftertouch) breathes harder.
 With **MPE** on, MIDI channels 2 to 16 carry one note each: its own bend (±48 semitones),
 pressure, and slide (CC 74), which moves the brightness.
@@ -54,6 +60,7 @@ to bottom:
 | SOUNDS (press SPEAK again) | as SPEAK | the consonant buttons (tap one to say it) and the vowel around it |
 | BEATBOX | the 16 steps, a row of four per bar | |
 | KIT (press BEATBOX again) | BEAT (Beat, Tempo, Swing, Mic FX); HUM VOICE; TRANSPORT (Follow Host, Play Beat, Gain) | the ten pads |
+| TYPE | TYPE (Type Into, Type Slot, Speech, Speak); SPEAK (Speech Rate, Start Line, IPA, Gain) | a keyboard, and the end of the text being typed |
 | BODY | BODY (Body, Female, Child, Gain); SETUP (MPE, Restart, Whisper, Breathe) | the body chips and the credit |
 
 The mode chips at the top of the center switch the mode from any page.
