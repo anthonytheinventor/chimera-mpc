@@ -122,6 +122,8 @@ constexpr int kVelumFrames = 8;    // engine/src/lib.rs VELUM_FRAMES
 constexpr int kLookMs = 50;        // the helper thread looks this often
 constexpr int kKnobLooks = 6;      // and stays quiet this many looks after a setting moves
 constexpr int kHitLooks = 3;       // a hit's pad stays lit this many looks (about 150 ms)
+constexpr int kResendEvery = 10;   // a new face frame is reported again every 10 looks (0.5 s)
+constexpr int kResendLooks = 60;   // for 60 looks (3 s) after it changed
 
 const std::vector<std::string> kSounds = {"B", "t", "Pf", "K", "^K", "!", "P!", "tss", "kch", "m"};
 
@@ -431,6 +433,7 @@ private:
         float seen[kNumParams];
         for (int i = 0; i < kNumParams; ++i) seen[i] = get(i);
         int lastFace = -1, lastVelum = -1, lastTyped = -1, knobLooks = 0, idleLooks = 0;
+        int faceAgain = 0, velumAgain = 0;
         int lastHitCount = hitCount_.load(std::memory_order_acquire), shownHit = -1, hitLooks = 0;
         uint32_t lastProcessed = 0;
         for (;;)
@@ -461,18 +464,27 @@ private:
             if (moved) knobLooks = kKnobLooks;
             else if (knobLooks > 0) --knobLooks;
 
-            auto show = [&](int index, int frame, int frames, int& last)
+            auto show = [&](int index, int frame, int frames, int& last, int& again)
             {
                 // held back while a setting moves, and shown once it rests: "last" is what the
                 // screen has, so a frame that changed during a knob sweep is still sent (in Play
-                // the mouth moves only with the knobs, and it never moved on the screen)
-                if (frame == last || knobLooks > 0) return;
-                last = frame;
-                setNormalised(index, (float)frame / (float)(frames - 1));
-                notifyHostParameterChanged(index);
+                // the mouth moves only with the knobs)
+                if (knobLooks > 0) return;
+                if (frame != last)
+                {
+                    last = frame;
+                    again = kResendLooks;
+                    setNormalised(index, (float)frame / (float)(frames - 1));
+                    notifyHostParameterChanged(index);
+                    return;
+                }
+                // a new frame is reported again every half second for a few seconds: in Play it
+                // is often the only report for a long time, and one the screen misses (the Q-Link
+                // window over the face, say) would leave the face stuck where it was
+                if (again > 0 && --again % kResendEvery == 0) notifyHostParameterChanged(index);
             };
-            show(kVisFace, faceFrame_.load(std::memory_order_relaxed), kFaceFrames, lastFace);
-            show(kVisVelum, velumFrame_.load(std::memory_order_relaxed), kVelumFrames, lastVelum);
+            show(kVisFace, faceFrame_.load(std::memory_order_relaxed), kFaceFrames, lastFace, faceAgain);
+            show(kVisVelum, velumFrame_.load(std::memory_order_relaxed), kVelumFrames, lastVelum, velumAgain);
             // the typed text: its value moves so the host reads the new text (a report alone does
             // not refresh a text whose value stayed the same); reported even while knobs move, as
             // typing is taps
