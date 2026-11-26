@@ -6,12 +6,14 @@ edition = "2024"
 license = "MIT"
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["staticlib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
 # CHIMERA's engine (MIT, Jameson Hodge), the mpc-opt branch: the MPC settings and the NEON airway
 chimera = { path = "../../../../chimera-vocal-synth/crates/chimera" }
+# the pronunciation dictionary is gzipped in Content/
+flate2 = "1"
 
 [features]
 # NEON loops in the airway step on 32-bit ARM (nightly Rust)

@@ -1,0 +1,10 @@
+# CHIMERA MPC lyrics: one line a slot (Lyrics 1 to 8). Each note sings the next syllable.
+# Lines starting with # and blank lines are skipped. Edit this file on the drive to change them.
+Hello there, I am a voice made of air.
+Every sound comes from a simulated airway.
+She sells sea shells by the sea shore.
+Twinkle twinkle little star, how I wonder what you are.
+Row, row, row your boat, gently down the stream.
+Happy birthday to you.
+Do re mi fa so la ti do.
+La la la la la la la la.

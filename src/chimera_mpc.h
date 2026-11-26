@@ -14,13 +14,19 @@ extern "C" {
 
 typedef struct ChimeraMpc ChimeraMpc;
 
-ChimeraMpc* cm_new(double sample_rate);
+// content_dir: the plugin's Content folder (lyrics.txt, cmudict.txt.gz), or null. Starts the
+// engine's lyrics thread.
+ChimeraMpc* cm_new(double sample_rate, const char* content_dir);
 void cm_free(ChimeraMpc* engine);
 
 // The engine's parameter defaults in parameter order (n values at most); returns its count.
 int cm_param_defaults(float* out, int n);
 // Every parameter at once, plain values in parameter order; applied at the next render.
 void cm_set_params(ChimeraMpc* engine, const float* values, int n);
+
+// The vowel pad's posture at (front, open), 0..1 each, for the body playing: 9 values (tongue
+// fwd, tongue up, jaw, lips open, protrude, lip width, tongue root, larynx, tip curl).
+void cm_vowel_posture(ChimeraMpc* engine, float front, float open, float* out9);
 
 void cm_note_on(ChimeraMpc* engine, int note, int velocity);
 void cm_note_off(ChimeraMpc* engine, int note);
@@ -30,6 +36,8 @@ void cm_pitch_bend(ChimeraMpc* engine, float bend);
 
 // n mono samples into out.
 void cm_render(ChimeraMpc* engine, float* out, int n);
+// 1 once the lyrics are ready (Sing sings "ah" until then).
+int cm_lyrics_ready(const ChimeraMpc* engine);
 int cm_failed(const ChimeraMpc* engine);
 
 #ifdef __cplusplus

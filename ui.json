@@ -1,12 +1,33 @@
 {
   "pages": [
     {
+      "name": "SING",
+      "controls": [
+        { "param": "Mode",        "widget": "switch" },
+        { "param": "Lyrics",      "widget": "knob" },
+        { "param": "Start Syl",   "widget": "knob" },
+        { "param": "Body",        "widget": "switch" },
+        { "param": "Vibrato",     "widget": "knob" },
+        { "param": "Vib Rate",    "widget": "knob" },
+        { "param": "Breathy",     "widget": "knob" },
+        { "param": "Ring",        "widget": "knob" },
+        { "param": "Breath",      "widget": "knob" },
+        { "param": "Pressed",     "widget": "knob" },
+        { "param": "Bright",      "widget": "knob" },
+        { "param": "Glide",       "widget": "knob" },
+        { "param": "Rough",       "widget": "knob" },
+        { "param": "Fry",         "widget": "knob" },
+        { "param": "Twang",       "widget": "knob" },
+        { "param": "False Folds", "widget": "knob" }
+      ]
+    },
+    {
       "name": "PLAY",
       "controls": [
+        { "param": "Pitch",       "widget": "knob" },
         { "param": "Breath",      "widget": "knob" },
         { "param": "Pressed",     "widget": "knob" },
         { "param": "Vibrato",     "widget": "knob" },
-        { "param": "Glide",       "widget": "knob" },
         { "param": "Bright",      "widget": "knob" },
         { "param": "Breathy",     "widget": "knob" },
         { "param": "Rough",       "widget": "knob" },
@@ -17,21 +38,30 @@
         { "param": "Jaw",         "widget": "knob" },
         { "param": "Soft Palate", "widget": "knob" },
         { "param": "Larynx",      "widget": "knob", "polarity": "bipolar" },
-        { "param": "Twang",       "widget": "knob" },
-        { "param": "False Folds", "widget": "knob" }
+        { "param": "Breathe",     "widget": "switch" },
+        { "param": "Whisper",     "widget": "switch" }
       ]
     },
     {
-      "name": "SHAPE",
+      "name": "VOWEL",
+      "controls": [
+        { "param": "Front",       "widget": "knob" },
+        { "param": "Open",        "widget": "knob" },
+        { "param": "Tongue Root", "widget": "knob", "polarity": "bipolar" },
+        { "param": "Tip Curl",    "widget": "knob" },
+        { "param": "Tongue Fwd",  "widget": "knob" },
+        { "param": "Tongue Up",   "widget": "knob" },
+        { "param": "Tip Fwd",     "widget": "knob" },
+        { "param": "Tip Up",      "widget": "knob" }
+      ]
+    },
+    {
+      "name": "BODY",
       "controls": [
         { "param": "Body",        "widget": "switch" },
         { "param": "Female",      "widget": "knob", "visibleWhen": { "param": "Body", "choice": "Blend" } },
         { "param": "Child",       "widget": "knob", "visibleWhen": { "param": "Body", "choice": "Blend" } },
-        { "param": "Gain",        "widget": "fader" },
-        { "param": "Tongue Root", "widget": "knob", "polarity": "bipolar" },
-        { "param": "Tip Curl",    "widget": "knob" },
-        { "param": "Ring",        "widget": "knob" },
-        { "param": "Vib Rate",    "widget": "knob" }
+        { "param": "Gain",        "widget": "fader" }
       ]
     }
   ],

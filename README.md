@@ -9,24 +9,37 @@ CHIMERA MPC is an independent project, not made or endorsed by Jameson Hodge.
 
 ## What it does
 
-This version is **Play mode**: play a note and the voice sings one held vowel at that pitch. Play
-legato: the last key held sets the pitch, and the voice breathes while any key is down. The pitch
-wheel bends ±2 semitones.
+**Mode** picks how notes play:
 
-Sing (lyrics, one syllable per note), Speak, Beatbox, the tongue handles, the vowel pad and the
-animated head are planned next.
+- **Sing** (the default): each note sings the next syllable of the lyrics, as CHIMERA's Sing mode
+  does. **Lyrics** picks one of eight lines from `Content/lyrics.txt` in the plugin folder; edit
+  that file on the drive to sing your own words. **Start Syl** sets where the lyrics start. The
+  first moment after loading, while the pronunciation dictionary loads, a note sings "ah".
+- **Play**: a note sings one held vowel at its pitch. Play legato: the last key held sets the
+  pitch. The voice breathes while a key is down, or all the time with **Breathe** on; **Pitch**
+  sets the pitch without a key. The mouth and throat controls shape the vowel, and the vowel pad
+  (**Front** and **Open**) blends CHIMERA's calibrated vowels and moves those controls to match.
+- **Speak** and **Beatbox** are planned and play as Play does for now.
+
+The pitch wheel bends ±2 semitones.
 
 ## Parameters
 
 | Page | Parameters |
 |---|---|
-| PLAY | Breath, Pressed, Vibrato, Glide; Bright, Breathy, Rough, Fry; Rounding, Lips Open, Protrude, Jaw; Soft Palate, Larynx, Twang, False Folds |
-| SHAPE | Body (Male, Female, Child, Blend), Female and Child (Blend), Gain; Tongue Root, Tip Curl, Ring, Vib Rate |
+| SING | Mode, Lyrics, Start Syl, Body; Vibrato, Vib Rate, Breathy, Ring; Breath, Pressed, Bright, Glide; Rough, Fry, Twang, False Folds |
+| PLAY | Pitch, Breath, Pressed, Vibrato; Bright, Breathy, Rough, Fry; Rounding, Lips Open, Protrude, Jaw; Soft Palate, Larynx, Breathe, Whisper |
+| VOWEL | Front, Open, Tongue Root, Tip Curl; Tongue Fwd, Tongue Up, Tip Fwd, Tip Up |
+| BODY | Body (Male, Female, Child, Blend), Female and Child (Blend), Gain |
 
 - **Breath** is the lung pressure (cmH2O). **Pressed** is how tightly the vocal folds close.
-- **Bright**, **Breathy**, **Rough** and **Fry** shape the sound of the vocal folds.
+- **Bright**, **Breathy**, **Rough** and **Fry** shape the sound of the vocal folds. **Whisper**
+  turns the voicing off.
 - **Ring** and **Twang** both narrow the tube just above the vocal folds; the larger of the two is used.
+- **Tip Fwd** and **Tip Up** place the tongue tip; at their starting values it rests where the
+  jaw and tongue body put it.
 - **Blend** plays the nearest of the three bodies for now. Mixing the bodies continuously comes later.
+- **Restart** and **MPE** are reserved for the next version.
 
 ## How it fits on a 32-bit MPC
 
@@ -60,8 +73,12 @@ yet on 32-bit ARM. The engine is built from the `mpc-opt` branch of a CHIMERA ch
 - `engine/`: CHIMERA's engine behind that interface (Rust static library).
 - `build_chimera.py`: the build.
 - `ui.json`: the pages on the MPC's screen.
-- `Content/CHIMERA-LICENSE.txt`: CHIMERA's MIT license, shipped with the plugin.
+- `Content/lyrics.txt`: the eight lyrics lines; `Content/cmudict.txt.gz`: the CMU pronouncing dictionary.
+- `Content/CHIMERA-LICENSE.txt`, `Content/CMUDICT-LICENSE.txt`: the licenses, shipped with the plugin.
+- `engine/tests/api.rs`: the engine through its C interface (`cargo test --release` in `engine/`), with WAVs in `build/listen/`.
 
 ## License
 
 CHIMERA is MIT licensed, copyright Jameson Hodge; its license is in `Content/CHIMERA-LICENSE.txt`.
+The CMU pronouncing dictionary is copyright Carnegie Mellon University, under the license in
+`Content/CMUDICT-LICENSE.txt`.

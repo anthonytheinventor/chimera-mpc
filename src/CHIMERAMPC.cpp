@@ -5,17 +5,20 @@
 // nose), not from samples. Its Rust engine is built into this plugin as a static library
 // (engine/, C interface in chimera_mpc.h) with the settings that fit a 32-bit MPC.
 //
-// Signal flow: MIDI notes -> the engine (Play mode: the last key held sets the pitch, legato,
-// and the breath runs while any key is held) -> mono voice -> Gain (smoothed) -> both outputs.
+// Signal flow: MIDI notes -> the engine -> mono voice -> Gain (smoothed) -> both outputs.
 //
-// This first version is Play mode only: notes sing one held posture, shaped by the voice
-// parameters (breath, tension, brightness, ...) and the articulators (jaw, lips, tongue root,
-// soft palate, larynx, ...). Sing, Speak and Beatbox, the tongue handles and the vowel pad come
-// later, appended to this parameter list.
+// Modes:
+//   Sing  each note sings the next syllable of the chosen lyrics (Content/lyrics.txt, one line a
+//         slot), as CHIMERA's Sing mode does; Start Syl picks where the lyrics start.
+//   Play  notes sing one held posture (legato: the last key held sets the pitch; the breath runs
+//         while a key is held or Breathe is on). The articulators shape it, and the vowel pad
+//         (Front, Open) blends CHIMERA's calibrated vowels and writes the result into them.
+//   Speak and Beatbox are not built yet: they play as Play does.
 //
 // Threads: the engine is created in prepare() (it allocates) and swapped in atomically; an old
 // one is freed only once process() has let go of it. reset() only raises a flag that process()
-// acts on, so the engine is only ever touched by one thread at a time.
+// acts on, so the engine is only ever touched by one thread at a time. The lyrics are turned into
+// syllables on the engine's own thread, which reads Content/.
 
 #include "mpc_plugin.h"
 #include "chimera_mpc.h"
@@ -24,11 +27,12 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <string>
 #include <thread>
 
 namespace {
 
-// Parameter order: the engine (engine/src/lib.rs, module p) reads the same list.
+// Parameter order: the engine (engine/src/lib.rs, module p) reads the same list. Append only.
 enum ParamIndex
 {
     kGain = 0,      // dB; parameter 0, harmless when the host nudges it
@@ -55,10 +59,27 @@ enum ParamIndex
     kLarynx,        // larynx height, cm
     kTwang,         // epilarynx narrowing
     kFalseFolds,    // ventricular folds
+    kTongueFwd,     // tongue body, front-back (template cm)
+    kTongueUp,      // tongue body, height
+    kTipFwd,        // tongue tip, front-back (at its rest values the tip follows the jaw)
+    kTipUp,         // tongue tip, height
+    kVowelFront,    // vowel pad: F2, back to front
+    kVowelOpen,     // vowel pad: F1, close to open
+    kWhisper,       // unvoiced breath
+    kPitch,         // Play: the pitch without a key, Hz
+    kMode,          // Sing / Play / Speak / Beatbox
+    kBreathe,       // Play: breathe without a key
+    kRestart,       // Sing: lyrics from the start when the transport starts (not yet)
+    kMpe,           // MPE note channels (not yet)
+    kLyrics,        // Sing: lyrics slot 1..8
+    kStartSyl,      // Sing: the syllable the lyrics start from
     kNumParams
 };
 
 constexpr int kChunk = 256;   // frames rendered per engine call
+
+// the vowel pad's output (cm_vowel_posture order) -> parameters
+constexpr int kPadParams[9] = {kTongueFwd, kTongueUp, kJaw, kLipsOpen, kProtrude, kRounding, kRoot, kLarynx, kTipCurl};
 
 } // namespace
 
@@ -95,6 +116,21 @@ public:
         addParam(mpc::floatParam("larynx",       "Larynx",      -1.5f, 1.5f, d[kLarynx], "cm", 2));
         pct("twang",       "Twang",       kTwang);
         pct("false_folds", "False Folds", kFalseFolds);
+        // the tongue: the calibrated vowels' range with a margin (template cm)
+        addParam(mpc::floatParam("tb_x",         "Tongue Fwd",  1.0f, 4.0f, d[kTongueFwd], "cm", 2));
+        addParam(mpc::floatParam("tb_y",         "Tongue Up",   5.0f, 8.2f, d[kTongueUp], "cm", 2));
+        addParam(mpc::floatParam("tt_x",         "Tip Fwd",     5.0f, 7.0f, d[kTipFwd], "cm", 2));
+        addParam(mpc::floatParam("tt_y",         "Tip Up",      5.2f, 9.8f, d[kTipUp], "cm", 2));
+        pct("vowel_front", "Front", kVowelFront);
+        pct("vowel_open",  "Open",  kVowelOpen);
+        addParam(mpc::boolParam ("whisper",      "Whisper",     false));
+        addParam(mpc::logParam  ("pitch",        "Pitch",       40.0f, 1100.0f, d[kPitch], "Hz", 0));
+        addParam(mpc::choiceParam("mode",        "Mode",        {"Sing", "Play", "Speak", "Beatbox"}, 0));
+        addParam(mpc::boolParam ("breathe",      "Breathe",     false));
+        addParam(mpc::boolParam ("restart",      "Restart",     true));
+        addParam(mpc::boolParam ("mpe",          "MPE",         false));
+        addParam(mpc::choiceParam("lyrics_slot", "Lyrics",      {"1", "2", "3", "4", "5", "6", "7", "8"}, 0));
+        addParam(mpc::intParam  ("start_syl",    "Start Syl",   0, 255, 0));
     }
 
     ~CHIMERAMPC() override
@@ -107,7 +143,8 @@ public:
     {
         (void)maxBlockSize;
         if (engine_.load() != nullptr && sampleRate == engineRate_) return;
-        ChimeraMpc* fresh = cm_new(sampleRate);
+        const std::string content = mpc::contentFolder();
+        ChimeraMpc* fresh = cm_new(sampleRate, content.empty() ? nullptr : content.c_str());
         engineRate_ = sampleRate;
         ChimeraMpc* old = engine_.exchange(fresh);
         // free the old engine only once process() is not using it
@@ -121,6 +158,7 @@ public:
     {
         allOff_.store(true, std::memory_order_release);
         smoothedGain_ = dbToGain(get(kGain));
+        padSeen_ = false;
     }
 
     void process(mpc::ProcessContext& ctx) override
@@ -134,10 +172,12 @@ public:
         }
         if (allOff_.exchange(false, std::memory_order_acq_rel)) cm_all_notes_off(e);
 
+        followVowelPad(e);
+
         // the parameters, in the engine's units (it applies only what changed)
         float v[kNumParams];
         for (int i = 0; i < kNumParams; ++i) v[i] = get(i);
-        for (int i : {kPressed, kBright, kBreathy, kRough, kFry, kRing, kBodyFemale, kBodyChild, kRounding, kTipCurl, kTwang, kFalseFolds})
+        for (int i : {kPressed, kBright, kBreathy, kRough, kFry, kRing, kBodyFemale, kBodyChild, kRounding, kTipCurl, kTwang, kFalseFolds, kVowelFront, kVowelOpen})
             v[i] *= 0.01f;
         v[kGlide] *= 0.001f;
         cm_set_params(e, v, kNumParams);
@@ -190,6 +230,32 @@ private:
 
     static float dbToGain(float dB) { return std::pow(10.0f, dB / 20.0f); }
 
+    // The vowel pad moved: its posture goes into the articulator parameters (the parameters stay
+    // the one record of the posture, so a saved project sounds the same). Written as values
+    // only: the screen shows them when it next reads them.
+    void followVowelPad(ChimeraMpc* e)
+    {
+        const float front = get(kVowelFront), open = get(kVowelOpen);
+        if (!padSeen_)
+        {
+            // first block after a load: the articulators already hold the posture
+            padSeen_ = true;
+            padFront_ = front; padOpen_ = open;
+            return;
+        }
+        if (front == padFront_ && open == padOpen_) return;
+        padFront_ = front; padOpen_ = open;
+        float a[9];
+        cm_vowel_posture(e, front * 0.01f, open * 0.01f, a);
+        a[5] = 1.0f - a[5];   // lip width -> Rounding
+        for (int k = 0; k < 9; ++k)
+        {
+            float x = a[k];
+            if (kPadParams[k] == kRounding || kPadParams[k] == kTipCurl) x *= 100.0f;   // percent parameters
+            set(kPadParams[k], x);
+        }
+    }
+
     void handleMidi(ChimeraMpc* e, const mpc::MidiEvent& m)
     {
         if (m.isNoteOn()) cm_note_on(e, m.note(), m.velocity());
@@ -203,6 +269,8 @@ private:
     std::atomic<bool> allOff_{false};
     double engineRate_ = 0.0;
     float smoothedGain_ = 1.0f;
+    bool padSeen_ = false;
+    float padFront_ = 0.0f, padOpen_ = 0.0f;
     float buf_[kChunk] = {};
 };
 
