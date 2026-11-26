@@ -35,7 +35,7 @@ CHIMERA MPC is an independent project, not made or endorsed by Jameson Hodge.
 With **Restart** on, Sing and Speak start again from Start Syl and Start Line each time the MPC's
 transport starts.
 
-**Typing your own words**: on the TYPE page, pick **Type Into** (Speech or Lyrics) and **Type Slot**
+**Typing your own words**: on the WORDS page, pick **Type Into** (Speech or Lyrics) and **Type Slot**
 (1 to 8), then type on the keyboard. **Del** takes the last character back, **Clear** empties the slot,
 and in Speech **Line** starts a new line: each note says the next line. The slot starts with the line
 from the text file; what you type replaces it and is saved with the project. A moment after you stop
@@ -47,23 +47,26 @@ pressure, and slide (CC 74), which moves the brightness.
 
 ## The screen
 
-Eight pages, two each side of a central screen in CHIMERA's look (glowing outlines on black). Each
-column of four Q-Links is one of CHIMERA's pages of four, colored green, red, pink and white from top
-to bottom:
+CHIMERA's look (glowing outlines on black): the controls on the left, so the MPC's Q-Link window,
+which slides in from the right, never covers them, and on the right the vocal tract, a full head in
+profile whose mouth and soft palate move as it sounds. Each row of four Q-Links is one of CHIMERA's
+pages of four, colored green, red, pink and white from left to right. Under the chin, the Jaw, Lips
+and Velum readouts follow their knobs.
 
-| Page | Columns | Center |
+| Page | Rows | Right side |
 |---|---|---|
-| SING | SONG (Vibrato, Vib Rate, Breathy, Ring); VOICE (Breath, Pressed, Bright, Glide); TONE (Rough, Fry, Twang, False Folds); LYRICS (Lyrics, Start Syl, Restart, Gain) | the mode chips and the vocal tract, moving as it sings |
+| SING | SONG (Vibrato, Vib Rate, Breathy, Ring); VOICE (Breath, Pressed, Bright, Glide); TONE (Rough, Fry, Twang, False Folds); LYRICS (Lyrics, Start Syl, Restart, Gain) | the vocal tract, moving as it sings |
 | PLAY | VOICE (Pitch, Breath, Pressed, Vibrato); TONE (Bright, Breathy, Rough, Fry); MOUTH (Rounding, Lips Open, Protrude, Jaw); THROAT (Soft Palate, Larynx, Twang, False Folds) | the vocal tract |
 | VOWEL (press PLAY again) | VOWEL (Front, Open, Soft Palate, Rounding); TONGUE (Tongue Fwd, Tongue Up, Tip Fwd, Tip Up); MORE (Tongue Root, Tip Curl, Glide, Vib Rate); VOICE (Pitch, Breath, Pressed, Bright) | the vowel chart: drag to set Front and Open |
 | SPEAK | SPEAK (Speech Rate, Start Line, Speech, IPA); VOICE; TONE (Breathy, Rough, Fry, Ring); SHAPE (Jaw, Lips Open, Larynx, Soft Palate) | the vocal tract |
 | SOUNDS (press SPEAK again) | as SPEAK | the consonant buttons (tap one to say it) and the vowel around it |
-| BEATBOX | the 16 steps, a row of four per bar | |
+| BEATBOX | the 16 steps, a row of four per bar | the vocal tract, the beat's name and tempo |
 | KIT (press BEATBOX again) | BEAT (Beat, Tempo, Swing, Mic FX); HUM VOICE; TRANSPORT (Follow Host, Play Beat, Gain) | the ten pads |
-| TYPE | TYPE (Type Into, Type Slot, Speech, Speak); SPEAK (Speech Rate, Start Line, IPA, Gain) | a keyboard, and the end of the text being typed |
-| BODY | BODY (Body, Female, Child, Gain); SETUP (MPE, Restart, Whisper, Breathe) | the body chips and the credit |
+| WORDS (function key 5) | Type Into, Type Slot, Speech Rate, Start Line | the end of the text being typed, with a full-width keyboard below |
+| BODY (function key 6) | BODY (Body, Female, Child, Gain); SETUP (MPE, Restart, Whisper, Breathe) | the vocal tract and the credit; the body chips are in the top bar |
 
-The mode chips at the top of the center switch the mode from any page.
+The mode chips in the top bar switch the mode from any page; the button at the top left is the
+page's main action (Breathe, Speak, Play Beat).
 
 ## Parameter notes
 
