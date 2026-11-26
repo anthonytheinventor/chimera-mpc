@@ -320,6 +320,11 @@ pub struct ChimeraMpc {
     first_lyrics: Vec<LiveSyllable>,
     speech: Option<Speech>,
     speech_cursor: usize,
+    /// the last drum sound heard (1.. STEP_IDS, for the screen's pads) and a count of hits
+    hit_pad: i32,
+    hit_serial: i32,
+    /// the voice clock up to which the sequencer's hits have been looked at
+    hit_clock: f64,
     /// the request last sent to the worker
     sent: Option<Request>,
     params: [f32; p::COUNT],
@@ -389,6 +394,9 @@ impl ChimeraMpc {
             first_lyrics: Vec::new(),
             speech: None,
             speech_cursor: 0,
+            hit_pad: 0,
+            hit_serial: 0,
+            hit_clock: 0.0,
             sent: None,
             params: defaults(),
             applied: [f32::NAN; p::COUNT],
@@ -602,12 +610,45 @@ impl ChimeraMpc {
     }
 
     fn beat_hit(&mut self, id: &str, accent: f64) {
+        self.show_hit(id);
         let step = BeatStep { id: Label::new(id), note: None, accent: Some(accent) };
         let hit = self.beat_time(id);
         self.engine.beat_hit_at(&step, hit, BEAT_HIT_LEN, None);
     }
 
+    /// The screen lights this sound's pad.
+    fn show_hit(&mut self, id: &str) {
+        if let Some(k) = STEP_IDS.iter().position(|s| *s == id) {
+            self.hit_pad = k as i32 + 1;
+            self.hit_serial = self.hit_serial.wrapping_add(1);
+        }
+    }
+
+    /// The sequencer's steps whose hits the voice clock has passed since the last look.
+    fn show_beat_hits(&mut self) {
+        let now = self.engine.clock();
+        let beat = self.engine.beat();
+        let (mut latest, mut id) = (self.hit_clock, None);
+        if beat.playing {
+            let steps = beat.steps();
+            for (n, t) in beat.recent_hits() {
+                if t > self.hit_clock && t <= now && t >= latest && !steps.is_empty() {
+                    if let Some(s) = &steps[n.rem_euclid(steps.len() as i64) as usize] {
+                        latest = t;
+                        id = STEP_IDS.iter().position(|x| *x == s.id.as_str());
+                    }
+                }
+            }
+        }
+        self.hit_clock = now;
+        if let Some(k) = id {
+            self.hit_pad = k as i32 + 1;
+            self.hit_serial = self.hit_serial.wrapping_add(1);
+        }
+    }
+
     fn start_hum(&mut self, midi: u8, accent: f64) {
+        self.show_hit("m");
         let hit = self.beat_time("m");
         self.engine.release_at(HUM_TAG, hit);
         let step = BeatStep { id: Label::new("m"), note: Some((midi.saturating_sub(HUM_DOWN)) as f64), accent: Some(accent) };
@@ -667,6 +708,15 @@ impl ChimeraMpc {
                 self.mode = m;
                 self.key_bend = 1.0;
                 self.update_bend();
+                // the gate belongs to Play: entering it, the keys held (none) and Breathe decide;
+                // leaving it, the other modes start from a closed gate (their gestures breathe).
+                // stop_notes ran in the old mode, so neither had happened yet: a gate left open
+                // by Breathe kept the voice on in Play with no key held
+                if m == MODE_PLAY {
+                    self.update_gate();
+                } else {
+                    self.engine.set_gate(0.0);
+                }
             }
         }
         let source = [p::BREATH, p::PRESSED, p::BRIGHT, p::GLIDE, p::BREATHY, p::ROUGH, p::FRY, p::VIBRATO, p::VIBRATO_RATE, p::WHISPER, p::MODE];
@@ -1004,6 +1054,7 @@ impl ChimeraMpc {
         }
         self.glide_expression(out.len());
         self.engine.render(out);
+        self.show_beat_hits();
         if self.mode == MODE_BEATBOX && self.params[p::MIC] >= 0.5 {
             self.close_mic.process(out);
         }
@@ -1389,7 +1440,9 @@ pub extern "C" fn cm_body_ready(h: *const ChimeraMpc) -> i32 {
 }
 
 /// What the screen shows now: `out[0]` the face strip's frame (the nearest of `face_postures`),
-/// `out[1]` the soft palate's frame (0..VELUM_FRAMES-1). Cheap; call it once a block.
+/// `out[1]` the soft palate's frame (0..VELUM_FRAMES-1), `out[2]` the last drum sound heard
+/// (0 none, 1.. STEP_IDS: the screen's pads), `out[3]` a count that moves at every hit. Cheap;
+/// call it once a block.
 #[unsafe(no_mangle)]
 pub extern "C" fn cm_display(h: *mut ChimeraMpc, out: *mut i32) {
     if out.is_null() {
@@ -1405,10 +1458,12 @@ pub extern "C" fn cm_display(h: *mut ChimeraMpc, out: *mut i32) {
             }
         }
         let v = ((x.velum + 0.25) / 1.45 * (VELUM_FRAMES - 1) as f64).round().clamp(0.0, (VELUM_FRAMES - 1) as f64) as i32;
-        // SAFETY: the caller gives room for 2 values
+        // SAFETY: the caller gives room for 4 values
         unsafe {
             *out = best.1 as i32;
             *out.add(1) = v;
+            *out.add(2) = e.hit_pad;
+            *out.add(3) = e.hit_serial;
         }
     });
 }

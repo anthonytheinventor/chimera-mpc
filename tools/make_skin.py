@@ -73,7 +73,7 @@ ROBOTO = find_font("Roboto-Regular.ttf", "segoeui.ttf")
 # The one switch for the encoder grouping: "rows" (approved: each row one of CHIMERA's pages of
 # four, Bank Direction RowTopDown) or "columns" (each column one page of four, Bank Direction Column)
 # --------------------------------------------------------------------------------------------
-GROUPING = "rows"
+GROUPING = "columns"   # the owner, 2026-11-26: the Q-Link window shows a column
 
 # --------------------------------------------------------------------------------------------
 # Geometry (the MPC's tab area is 1280 x 628). Mirrored from design.md B.3.
@@ -582,18 +582,44 @@ def dial_file(slot):
     return put("dial_%s.png" % SLOT_NAMES[slot], DIAL_STRIPS[slot])
 
 
+def solid_button(w, h, color, text, px, path=None, track=0.12):
+    """an "on" button (the owner, 2026-11-26: on = solid, off = outline): filled with its color,
+    the text dark on it; opaque (buttons sit on the black page)"""
+    ink = Ink(w, h)
+    ink.fill_post(0, 0, w, h, core(color) if color == AMBER else light(color))
+
+    def txt(d):
+        f = font(path or HERSHEY, px + (6 if path else 0))
+        if path:
+            d.text((w / 2, h / 2), text, font=f, fill=BTN_TEXT, anchor="mm")
+            return
+        widths = [f.getlength(ch) for ch in text]
+        x0 = w / 2 - (sum(widths) + track * px * (len(text) - 1)) / 2
+        for ch, wd in zip(text, widths):
+            d.text((x0, (h - px) / 2 - 1), ch, font=f, fill=BTN_TEXT)
+            x0 += wd + track * px
+    ink.post.append(txt)
+    return ink.render(False).convert("RGBA")
+
+
+def outline_button(w, h, color, text, px, path=None, track=0.13):
+    """an "off" button: a clear 1.4 px outline and the text in its color"""
+    ink = Ink(w, h)
+    ink.rect(0, 0, w, h, color, 1.4, 0.85)
+    if path:
+        ink.glyph(w / 2, h / 2, text, px + 6, color, path)
+    else:
+        ink.cap(w / 2, (h - px) / 2 - 1, text, px, color, "m", track, 0.9)
+    return ink.rgba()
+
+
 def chip_files(text, w, h=40, path=None, px=15):
-    """a square chip: off = dim frame, quiet text; on = bright frame, near-white text"""
+    """a square chip: on = solid blue, dark text; off = blue outline, blue text"""
     names = []
     for on in (True, False):
-        ink = Ink(w, h)
-        ink.rect(0, 0, w, h, BLUE if on else FRAME, 1.4 if on else 1.0)
-        if path:
-            ink.glyph(w / 2, h / 2, text, px + 6, core(BLUE) if on else QUIET, path)
-        else:
-            ink.cap(w / 2, (h - px) / 2 - 1, text, px, core(BLUE) if on else QUIET, "m", 0.13)
+        img = solid_button(w, h, BLUE, text, px, path) if on else outline_button(w, h, BLUE, text, px, path)
         tag = slug(text) if all(ord(c) < 128 for c in text) else "u%s" % "".join("%04x" % ord(c) for c in text)
-        names.append(put("chip_%s_%d_%s.png" % (tag, w, "on" if on else "off"), ink.rgba()))
+        names.append(put("chip_%s_%d_%s.png" % (tag, w, "on" if on else "off"), img))
     return names
 
 
@@ -601,14 +627,8 @@ def main_button_files(text):
     w, h = MAIN_BTN[2], MAIN_BTN[3]
     names = []
     for on in (True, False):
-        ink = Ink(w, h)
-        if on:
-            ink.fill_post(0, 0, w, h, core(AMBER))
-            ink.post.append(lambda d: d.rectangle((0, 0, w - 1, h - 1), outline=(255, 255, 255), width=2))
-        else:
-            ink.fill_post(0, 0, w, h, AMBER)
-        ink.text_post(w / 2, (h - 17) / 2 - 1, text, 17, BTN_TEXT, 0.1)
-        names.append(put("main_%s_%s.png" % (slug(text), "on" if on else "off"), ink.render(False).convert("RGBA")))
+        img = solid_button(w, h, AMBER, text, 17, track=0.1) if on else outline_button(w, h, AMBER, text, 17, track=0.1)
+        names.append(put("main_%s_%s.png" % (slug(text), "on" if on else "off"), img))
     return names
 
 
@@ -616,10 +636,8 @@ def toggle_files(slot):
     color = SLOTS[slot]
     names = []
     for on in (True, False):
-        ink = Ink(100, 44)
-        ink.rect(0, 0, 100, 44, color, 1.4 if on else 1.0, 1.0 if on else 0.45)
-        ink.cap(50, 14, "ON" if on else "OFF", 16, core(color) if on else color, "m", 0.14, 1.0 if on else 0.6)
-        names.append(put("toggle_%s_%s.png" % (SLOT_NAMES[slot], "on" if on else "off"), ink.rgba()))
+        img = solid_button(100, 44, color, "ON", 16, track=0.14) if on else outline_button(100, 44, color, "OFF", 16, track=0.14)
+        names.append(put("toggle_%s_%s.png" % (SLOT_NAMES[slot], "on" if on else "off"), img))
     return names
 
 
@@ -661,9 +679,11 @@ def rect_str(x, y, w, h):
     return "%d %d %d %d" % (int(round(x)), int(round(y)), int(round(w)), int(round(h)))
 
 
-def image_entry(name, image, bounds):
+def image_entry(name, image, bounds, when=None):
+    """when = (choice, number of choices, handle): shown only while that parameter is at that choice"""
     data = G.obj(("version", 2), ("imageType", "Regular"), ("colour", "0"), ("image", image))
-    return G.entry(name, "Image", data, rect_str(*bounds), "No", "Show", "Always")
+    inv = ["IndexedEnabling/%d/%d/%s" % when] if when else None
+    return G.entry(name, "Image", data, rect_str(*bounds), "No", "Show", "Always", invalidating=inv)
 
 
 def film_entry(name, image, frames, handle, bounds):
@@ -957,6 +977,11 @@ def pads_screen(b, ch):
             ink.cap(m + 262, m + 24, sym, 34, core(AMBER), "r", 0.02)
         f, dx, dy = baked(("pad", name, sym), 280, 88, art, prefix="g")
         b.pic(ch, f, x + dx, y + dy)
+    # the pad last heard (a kit pad, a drum key, or a step of the beat) lights for a moment: the
+    # touch's own lit cap, shown while Hit names that pad
+    hit = b.ref(params["Hit"])
+    for k, (x, y) in enumerate(pos):
+        ch.append(image_entry("hit %d" % (k + 1), on, (x, y, 280, 88), when=(k + 1, len(hit.choices), hit.handle)))
     p = params["Pad"]
     for k, (x, y) in enumerate(pos):
         b.button(ch, p, on, off, k + 1, len(p.choices), x, y, momentary=True)
@@ -965,7 +990,8 @@ def pads_screen(b, ch):
 
 
 def steps_block(b, ch):
-    """BEATBOX: the 4 x 4 step grid (a bank is one beat, Bank Direction RowTopDown)"""
+    """BEATBOX: the 4 x 4 step grid, one bar per column read top to bottom (a bank is one bar;
+    Bank Direction Column, like the Q-Link window's column of four)"""
     params = b.params
     bounds = []
 
@@ -976,7 +1002,7 @@ def steps_block(b, ch):
     dn = b.need("chimStep", step_def)
     assigned = {}
     for k in range(16):
-        r, c = divmod(k, 4)
+        c, r = divmod(k, 4)
         x, y = GRID_X + c * 166, TOP + r * 144
         b.frame(ch, x, y, 160, 138, BLUE_DIM if c == 0 else FRAME)
         b.cap(ch, x + 10, y + 8, "%d" % (k + 1), 15, QUIET, "l", 0.1)
@@ -984,8 +1010,8 @@ def steps_block(b, ch):
         ch.append(G.entry(p.name, dn, G.obj(("version", 1), ("handleName", "Data")), rect_str(x, y, 160, 138),
                           "Yes", "Hide", "Always", remap=[("Data", p.handle)]))
         assigned[13 + c - 4 * r] = p.index
-    for r in range(4):
-        bounds.append(rect_str(GRID_X - 2, TOP + r * 144 - 2, GRID_W + 4, 142))
+    for c in range(4):
+        bounds.append(rect_str(GRID_X + c * 166 - 2, TOP - 2, 164, 4 * 144 + 2))
     return bounds, assigned
 
 
@@ -1045,7 +1071,7 @@ def build_tui(params, units, face):
             pads_screen(b, ch)
         if page.get("left") == "steps":
             bounds, assigned = steps_block(b, ch)
-            direction = "RowTopDown"
+            direction = "Column"
         elif page.get("left") == "words":
             bounds, assigned = words_block(b, ch)
             direction = "RowTopDown"
@@ -1130,6 +1156,14 @@ class Previewer:
             return self.repl[base][int(round(self.value(handle) * (n - 1)))]
         return p.display or PREVIEW_SAMPLE.get(p.name, "")
 
+    def enabled(self, h):
+        """IndexedEnabling/<choice>/<n>/<handle> at the parameters' defaults"""
+        parts = h.split("/")
+        if parts[0] != "IndexedEnabling":
+            return True
+        k, n, hd = int(parts[1]), int(parts[2]), "/".join(parts[3:])
+        return int(round(self.value(hd) * (n - 1))) == k
+
     def draw(self, tab):
         img = Image.new("RGBA", (W, H), (0, 0, 0, 255))
         root = oget(tab, "componentDefinition")
@@ -1142,6 +1176,9 @@ class Previewer:
             typ, data = oget(cd, "type"), oget(cd, "data")
             x, y, w, h = (float(v) for v in oget(oget(e, "bounds"), "bounds").split())
             x, y = x + ox, y + oy
+            inv = oget(oget(e, "bounds"), "additionalInvalidatingHandles") or []
+            if any(not self.enabled(h_) for h_ in inv):
+                continue
             local = {oget(m, "key"): oget(m, "value") for m in oget(oget(e, "handle remapping"), "map")}
             rm = {k: remap.get(v, v) for k, v in local.items()}
 

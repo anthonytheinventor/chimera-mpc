@@ -108,17 +108,19 @@ enum ParamIndex
     kTypeSlot,                 // 1..8: which slot
     kKey,                      // one key (on a change to it): the letters, punctuation, Del, Line, Clear
     kTyped,                    // read-only: its text is the end of the slot being typed (formatValue)
+    kHit,                      // read-only: the pad to light on the screen (0 none, 1..10 as Pad)
     kNumParams
 };
 
 constexpr int kEngineParams = kKey + 1;   // the engine reads 0..kKey (engine/src/lib.rs, module p)
 
-bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped; }
+bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit; }
 
 constexpr int kFaceFrames = 33;    // engine/src/lib.rs face_postures()
 constexpr int kVelumFrames = 8;    // engine/src/lib.rs VELUM_FRAMES
 constexpr int kLookMs = 50;        // the helper thread looks this often
 constexpr int kKnobLooks = 6;      // and stays quiet this many looks after a setting moves
+constexpr int kHitLooks = 3;       // a hit's pad stays lit this many looks (about 150 ms)
 
 const std::vector<std::string> kSounds = {"B", "t", "Pf", "K", "^K", "!", "P!", "tss", "kch", "m"};
 
@@ -215,13 +217,16 @@ public:
         std::vector<std::string> keys = {"-"};
         for (char c = 'A'; c <= 'Z'; ++c) keys.push_back(std::string(1, c));
         for (const char* k : {"Space", ".", ",", "?", "!", "'", "Del", "Line", "Clear"}) keys.push_back(k);
-        // typing is taps on the screen: never recorded as automation
+        // typing is taps on the screen. Automatable, like every control the screen sets: the MPC
+        // did not take the keyboard's taps while Key said it could not be automated.
         mpc::Param key = mpc::choiceParam("key", "Key", keys, 0);
-        key.automatable = false;
         addParam(key);
         mpc::Param typed = mpc::intParam("typed", "Typed", 0, 1023, 0);
         typed.automatable = false;
         addParam(typed);
+        mpc::Param hit = mpc::choiceParam("hit", "Hit", {"-", "Kick", "Hat", "Snare", "Rim", "Inward", "Click", "Pop", "Open Hat", "Crash", "Hum"}, 0);
+        hit.automatable = false;
+        addParam(hit);
         texts_ = cm_texts_new();
 
         // Built-in programs: voices only. Each sets parameters 0-13 (Gain, the voice source, the
@@ -309,6 +314,7 @@ public:
         smoothedGain_ = dbToGain(get(kGain));
         padSeen_ = false;
         beatSeen_ = false;
+        slotsSeen_ = false;
     }
 
     void process(mpc::ProcessContext& ctx) override
@@ -324,6 +330,7 @@ public:
 
         followVowelPad(e);
         followBeatPreset();
+        followSlots();
         const mpc::Transport& t = ctx.transport;
         cm_transport(e, t.playing ? 1 : 0, t.tempoValid ? 1 : 0, t.bpm, t.ppqValid ? 1 : 0, t.ppqPos, ctx.numFrames);
 
@@ -369,10 +376,12 @@ public:
             previewSerialSeen_ = serial;
             writePreview(preview);
         }
-        int shown[2] = {0, 0};
+        int shown[4] = {0, 0, 0, 0};
         cm_display(e, shown);
         faceFrame_.store(shown[0], std::memory_order_relaxed);
         velumFrame_.store(shown[1], std::memory_order_relaxed);
+        hitPad_.store(shown[2], std::memory_order_relaxed);
+        hitCount_.store(shown[3], std::memory_order_release);
         processed_.fetch_add(1, std::memory_order_relaxed);
         inProcess_.store(false, std::memory_order_release);
     }
@@ -424,6 +433,7 @@ private:
         float seen[kNumParams];
         for (int i = 0; i < kNumParams; ++i) seen[i] = get(i);
         int lastFace = -1, lastVelum = -1, lastTyped = -1, knobLooks = 0, idleLooks = 0;
+        int lastHitCount = hitCount_.load(std::memory_order_acquire), shownHit = -1, hitLooks = 0;
         uint32_t lastProcessed = 0;
         for (;;)
         {
@@ -449,10 +459,13 @@ private:
 
             auto show = [&](int index, int frame, int frames, int& last)
             {
-                if (frame == last) return;
+                // held back while a setting moves, and shown once it rests: "last" is what the
+                // screen has, so a frame that changed during a knob sweep is still sent (in Play
+                // the mouth moves only with the knobs, and it never moved on the screen)
+                if (frame == last || knobLooks > 0) return;
                 last = frame;
                 setNormalised(index, (float)frame / (float)(frames - 1));
-                if (knobLooks == 0) notifyHostParameterChanged(index);
+                notifyHostParameterChanged(index);
             };
             show(kVisFace, faceFrame_.load(std::memory_order_relaxed), kFaceFrames, lastFace);
             show(kVisVelum, velumFrame_.load(std::memory_order_relaxed), kVelumFrames, lastVelum);
@@ -465,6 +478,23 @@ private:
                 lastTyped = typed;
                 setNormalised(kTyped, (float)typed / 1023.0f);
                 notifyHostParameterChanged(kTyped);
+            }
+            // a drum hit lights its pad for a moment (reported even while knobs move: hits are taps)
+            const int hits = hitCount_.load(std::memory_order_acquire);
+            int lit = shownHit < 0 ? 0 : shownHit;
+            if (hits != lastHitCount)
+            {
+                lastHitCount = hits;
+                lit = hitPad_.load(std::memory_order_relaxed);
+                hitLooks = kHitLooks;
+            }
+            else if (hitLooks > 0 && --hitLooks == 0)
+                lit = 0;
+            if (lit != shownHit)
+            {
+                shownHit = lit;
+                set(kHit, (float)lit);
+                notifyHostParameterChanged(kHit);
             }
         }
     }
@@ -527,6 +557,25 @@ private:
         set(kSwing, swing * 100.0f);
     }
 
+    // The WORDS page's Type Slot and the slot that plays (Speech, or Lyrics while typing lyrics)
+    // are kept the same, so the text on the screen is the text the voice says: turning either one
+    // moves the other, and switching Type Into shows the slot that target plays. After a load
+    // (reset) the values are taken as they are, so a project saves back exactly as it loaded.
+    void followSlots()
+    {
+        const int into = getInt(kTypeInto);
+        const int target = into == 1 ? kLyrics : kSpeech;
+        const int slot = getInt(kTypeSlot), playing = getInt(target);
+        if (!slotsSeen_) {}
+        else if (into != lastInto_) set(kTypeSlot, (float)playing);
+        else if (slot != lastTypeSlot_) set(target, (float)slot);
+        else if (playing != lastPlaying_) set(kTypeSlot, (float)playing);
+        slotsSeen_ = true;
+        lastInto_ = into;
+        lastTypeSlot_ = getInt(kTypeSlot);
+        lastPlaying_ = getInt(target);
+    }
+
     // Every channel message goes to the engine as it came: notes, pitch bend, channel and key
     // pressure, CC 74 (MPE slide) and all-notes-off (with MPE, channels 2-16 are note channels).
     void handleMidi(ChimeraMpc* e, const mpc::MidiEvent& m)
@@ -539,7 +588,7 @@ private:
     std::atomic<bool> inProcess_{false};
     std::atomic<bool> allOff_{false};
     std::atomic<bool> settle_{false};
-    std::atomic<int> faceFrame_{0}, velumFrame_{0};
+    std::atomic<int> faceFrame_{0}, velumFrame_{0}, hitPad_{0}, hitCount_{0};
     const void* texts_ = nullptr;
     std::atomic<char> previewBuf_[64] = {};
     std::atomic<uint32_t> previewSeq_{0}, previewWrites_{0};
@@ -553,6 +602,8 @@ private:
     float smoothedGain_ = 1.0f;
     bool padSeen_ = false;
     bool beatSeen_ = false;
+    bool slotsSeen_ = false;
+    int lastInto_ = 0, lastTypeSlot_ = 0, lastPlaying_ = 0;
     int lastBeat_ = 0;
     float padFront_ = 0.0f, padOpen_ = 0.0f;
     float buf_[kChunk] = {};

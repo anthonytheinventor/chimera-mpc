@@ -423,3 +423,60 @@ fn typed_texts_survive_a_save_and_load() {
     assert_eq!(&out, data);
     cm_texts_free(bank);
 }
+
+#[test]
+fn breathe_left_on_in_play_does_not_breathe_in_another_mode() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 1.0);
+    r.set(p::BREATHE, 1.0);
+    r.render(1.0);
+    assert!(rms(&r.out[r.out.len() / 2..]) > 0.005, "Breathe makes no sound in Play");
+    // to Sing with Breathe still on, no note: silence once the breath has died away
+    r.set(p::MODE, 0.0);
+    r.render(1.5);
+    r.out.clear();
+    r.render(0.5);
+    assert!(rms(&r.out) < 1e-3, "the voice kept breathing in Sing: {}", rms(&r.out));
+    // Breathe off there, back to Play: still silent with no key held
+    r.set(p::BREATHE, 0.0);
+    r.render(0.1);
+    r.set(p::MODE, 1.0);
+    r.render(1.5);
+    r.out.clear();
+    r.render(0.5);
+    assert!(rms(&r.out) < 1e-3, "the voice is stuck on in Play: {}", rms(&r.out));
+}
+
+#[test]
+fn drum_hits_are_reported_for_the_screen() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 3.0);
+    r.render(0.2);
+    let mut shown = [0i32; 4];
+    cm_display(r.h, shown.as_mut_ptr());
+    let before = shown[3];
+    // a GM snare key: the snare pad (3: "Pf")
+    cm_note_on(r.h, 38, 100);
+    r.render(0.05);
+    cm_note_off(r.h, 38);
+    cm_display(r.h, shown.as_mut_ptr());
+    assert_eq!(shown[2], 3, "the snare's pad");
+    assert_ne!(shown[3], before, "the hit count moved");
+    // the kit pad Kick (1), tapped on the screen
+    r.set(p::PAD, 1.0);
+    r.render(0.05);
+    r.set(p::PAD, 0.0);
+    r.render(0.05);
+    cm_display(r.h, shown.as_mut_ptr());
+    assert_eq!(shown[2], 1, "the kick's pad");
+    // the beat's own steps light their pads as they sound
+    r.set(p::FOLLOW, 0.0);
+    r.set(p::PLAY_BEAT, 1.0);
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..80 {
+        r.render(0.025);
+        cm_display(r.h, shown.as_mut_ptr());
+        seen.insert(shown[2]);
+    }
+    assert!(seen.len() >= 3, "the beat lit only {seen:?}");
+}
