@@ -39,17 +39,26 @@ The pitch wheel bends ±2 semitones, and channel or key pressure (aftertouch) br
 With **MPE** on, MIDI channels 2 to 16 carry one note each: its own bend (±48 semitones),
 pressure, and slide (CC 74), which moves the brightness.
 
-## Parameters
+## The screen
 
-| Page | Parameters |
-|---|---|
-| SING | Mode, Lyrics, Start Syl, Body; Vibrato, Vib Rate, Breathy, Ring; Breath, Pressed, Bright, Glide; Rough, Fry, Twang, False Folds |
-| PLAY | Pitch, Breath, Pressed, Vibrato; Bright, Breathy, Rough, Fry; Rounding, Lips Open, Protrude, Jaw; Soft Palate, Larynx, Breathe, Whisper |
-| VOWEL | Front, Open, Tongue Root, Tip Curl; Tongue Fwd, Tongue Up, Tip Fwd, Tip Up |
-| SPEAK | Mode, Speech, Start Line, Speak; Speech Rate, IPA, Body, Gain; Breath, Pressed, Bright, Glide; Breathy, Rough, Consonant, Pad Vowel |
-| BEATBOX | Step 1 to Step 16 |
-| KIT | Beat, Tempo, Swing, Play Beat; Follow Host, Mic FX, Pad, Mode; Breath, Pressed, Bright, Glide |
-| BODY | Body (Male, Female, Child, Blend), Female and Child (Blend), Gain; MPE, Restart |
+Eight pages, two each side of a central screen in CHIMERA's look (glowing outlines on black). Each
+column of four Q-Links is one of CHIMERA's pages of four, colored green, red, pink and white from top
+to bottom:
+
+| Page | Columns | Center |
+|---|---|---|
+| SING | SONG (Vibrato, Vib Rate, Breathy, Ring); VOICE (Breath, Pressed, Bright, Glide); TONE (Rough, Fry, Twang, False Folds); LYRICS (Lyrics, Start Syl, Restart, Gain) | the mode chips and the vocal tract, moving as it sings |
+| PLAY | VOICE (Pitch, Breath, Pressed, Vibrato); TONE (Bright, Breathy, Rough, Fry); MOUTH (Rounding, Lips Open, Protrude, Jaw); THROAT (Soft Palate, Larynx, Twang, False Folds) | the vocal tract |
+| VOWEL (press PLAY again) | VOWEL (Front, Open, Soft Palate, Rounding); TONGUE (Tongue Fwd, Tongue Up, Tip Fwd, Tip Up); MORE (Tongue Root, Tip Curl, Glide, Vib Rate); VOICE (Pitch, Breath, Pressed, Bright) | the vowel chart: drag to set Front and Open |
+| SPEAK | SPEAK (Speech Rate, Start Line, Speech, IPA); VOICE; TONE (Breathy, Rough, Fry, Ring); SHAPE (Jaw, Lips Open, Larynx, Soft Palate) | the vocal tract |
+| SOUNDS (press SPEAK again) | as SPEAK | the consonant buttons (tap one to say it) and the vowel around it |
+| BEATBOX | the 16 steps, a row of four per bar | |
+| KIT (press BEATBOX again) | BEAT (Beat, Tempo, Swing, Mic FX); HUM VOICE; TRANSPORT (Follow Host, Play Beat, Gain) | the ten pads |
+| BODY | BODY (Body, Female, Child, Gain); SETUP (MPE, Restart, Whisper, Breathe) | the body chips and the credit |
+
+The mode chips at the top of the center switch the mode from any page.
+
+## Parameter notes
 
 - **Breath** is the lung pressure (cmH2O). **Pressed** is how tightly the vocal folds close.
 - **Bright**, **Breathy**, **Rough** and **Fry** shape the sound of the vocal folds. **Whisper**
@@ -93,7 +102,9 @@ yet on 32-bit ARM. The engine is built from the `mpc-opt` branch of a CHIMERA ch
 - `engine/`: CHIMERA's engine behind that interface (Rust static library); `engine/src/worker.rs` is its own
   thread (dictionary, lyrics, spoken lines, blended voices); `engine/src/close_mic.rs` is CHIMERA's close-mic sound.
 - `build_chimera.py`: the build.
-- `ui.json`: the pages on the MPC's screen.
+- `tools/make_skin.py`: draws the screen (`skins/`, previews in `build/preview/`) from the build's
+  `build/params.json` and the vocal tract's outlines (`cargo run --release --example dump_face` in `engine/`,
+  written to `build/face.json`); `ui.json` is no longer used once `skins/` exists.
 - `Content/lyrics.txt`: the eight lyrics lines; `Content/speech.txt`: the eight blocks of spoken lines;
   `Content/cmudict.txt.gz`: the CMU pronouncing dictionary.
 - `Content/CHIMERA-LICENSE.txt`, `Content/CMUDICT-LICENSE.txt`: the licenses, shipped with the plugin.

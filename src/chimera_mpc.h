@@ -47,6 +47,8 @@ void cm_render(ChimeraMpc* engine, float* out, int n);
 int cm_lyrics_ready(const ChimeraMpc* engine);
 // 1 when the voice playing is the body the parameters ask for (a Blend takes a moment).
 int cm_body_ready(const ChimeraMpc* engine);
+// What the screen shows now: out[0] the face strip's frame, out[1] the soft palate's frame.
+void cm_display(ChimeraMpc* engine, int* out2);
 int cm_failed(const ChimeraMpc* engine);
 
 #ifdef __cplusplus

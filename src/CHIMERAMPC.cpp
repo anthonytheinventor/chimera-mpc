@@ -33,6 +33,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <cmath>
 #include <string>
 #include <thread>
@@ -97,8 +99,17 @@ enum ParamIndex
     kStep1,         // Beatbox: steps 1..16 (rest or a sound)
     kStep16 = kStep1 + 15,
     kPad,           // Beatbox: hit a sound now (on its rise)
+    kNumSettings,
+    // read-only displays for the skin (not automatable; the helper thread writes them)
+    kVisFace = kNumSettings,   // the face strip's frame (the nearest mouth posture)
+    kVisVelum,                 // the soft palate strip's frame
     kNumParams
 };
+
+constexpr int kFaceFrames = 33;    // engine/src/lib.rs face_postures()
+constexpr int kVelumFrames = 8;    // engine/src/lib.rs VELUM_FRAMES
+constexpr int kLookMs = 50;        // the helper thread looks this often
+constexpr int kKnobLooks = 6;      // and stays quiet this many looks after a setting moves
 
 const std::vector<std::string> kSounds = {"B", "t", "Pf", "K", "^K", "!", "P!", "tss", "kch", "m"};
 
@@ -182,10 +193,29 @@ public:
         std::vector<std::string> padChoices = {"-"};
         for (const std::string& s : kSounds) padChoices.push_back(s);
         addParam(mpc::choiceParam("pad",         "Pad",         padChoices, 0));
+
+        mpc::Param face = mpc::intParam("vis_face", "Face", 0, kFaceFrames - 1, 0);
+        mpc::Param velum = mpc::intParam("vis_velum", "Velum Pos", 0, kVelumFrames - 1, 0);
+        face.automatable = false;
+        velum.automatable = false;
+        addParam(face);
+        addParam(velum);
+
+        // The helper thread puts the face on the screen (see notifierMain). Without it the plugin
+        // still plays; the face then stands still.
+        try { notifier_ = std::thread(&CHIMERAMPC::notifierMain, this); }
+        catch (...) { mpc::log("CHIMERA MPC: could not start the helper thread; the face will not move"); }
     }
 
     ~CHIMERAMPC() override
     {
+        {
+            // under the lock, so the notifier cannot miss the wake-up between its look and its wait
+            std::lock_guard<std::mutex> lock(quitMutex_);
+            quit_.store(true);
+        }
+        quitCv_.notify_all();
+        if (notifier_.joinable()) notifier_.join();
         cm_free(engine_.exchange(nullptr));
     }
 
@@ -230,12 +260,12 @@ public:
         cm_transport(e, t.playing ? 1 : 0, t.tempoValid ? 1 : 0, t.bpm, t.ppqValid ? 1 : 0, t.ppqPos, ctx.numFrames);
 
         // the parameters, in the engine's units (it applies only what changed)
-        float v[kNumParams];
-        for (int i = 0; i < kNumParams; ++i) v[i] = get(i);
+        float v[kNumSettings];
+        for (int i = 0; i < kNumSettings; ++i) v[i] = get(i);
         for (int i : {kPressed, kBright, kBreathy, kRough, kFry, kRing, kBodyFemale, kBodyChild, kRounding, kTipCurl, kTwang, kFalseFolds, kVowelFront, kVowelOpen, kSwing})
             v[i] *= 0.01f;
         v[kGlide] *= 0.001f;
-        cm_set_params(e, v, kNumParams);
+        cm_set_params(e, v, kNumSettings);
         const float targetGain = dbToGain(get(kGain));
 
         const int numFrames = ctx.numFrames;
@@ -263,10 +293,59 @@ public:
                 frame += n;
             }
         }
+        int shown[2] = {0, 0};
+        cm_display(e, shown);
+        faceFrame_.store(shown[0], std::memory_order_relaxed);
+        velumFrame_.store(shown[1], std::memory_order_relaxed);
+        processed_.fetch_add(1, std::memory_order_relaxed);
         inProcess_.store(false, std::memory_order_release);
     }
 
 private:
+    // The helper thread: every 50 ms it moves the face's display parameters to what the voice is
+    // doing and reports the ones that changed, so the screen's film strips follow. While a
+    // setting is moving (a Q-Link, the screen, the data wheel) it writes them without reporting
+    // for about 300 ms: the house plugins found the MPC's Q-Link screen can lock up when reports
+    // come in during a knob sweep. It also stays quiet while the audio is not running (the host
+    // suspended or is closing the plugin), and stops at once when the plugin closes.
+    void notifierMain()
+    {
+        float seen[kNumSettings];
+        for (int i = 0; i < kNumSettings; ++i) seen[i] = get(i);
+        int lastFace = -1, lastVelum = -1, knobLooks = 0, idleLooks = 0;
+        uint32_t lastProcessed = 0;
+        for (;;)
+        {
+            {
+                std::unique_lock<std::mutex> lock(quitMutex_);
+                if (quitCv_.wait_for(lock, std::chrono::milliseconds(kLookMs), [this] { return quit_.load(); })) break;
+            }
+            const uint32_t n = processed_.load(std::memory_order_relaxed);
+            idleLooks = (n == lastProcessed) ? idleLooks + 1 : 0;
+            lastProcessed = n;
+            if (idleLooks > 3) continue;   // no audio for 200 ms: say nothing to the host
+
+            bool moved = false;
+            for (int i = 0; i < kNumSettings; ++i)
+            {
+                const float x = get(i);
+                if (x != seen[i]) { moved = true; seen[i] = x; }
+            }
+            if (moved) knobLooks = kKnobLooks;
+            else if (knobLooks > 0) --knobLooks;
+
+            auto show = [&](int index, int frame, int frames, int& last)
+            {
+                if (frame == last) return;
+                last = frame;
+                setNormalised(index, (float)frame / (float)(frames - 1));
+                if (knobLooks == 0) notifyHostParameterChanged(index);
+            };
+            show(kVisFace, faceFrame_.load(std::memory_order_relaxed), kFaceFrames, lastFace);
+            show(kVisVelum, velumFrame_.load(std::memory_order_relaxed), kVelumFrames, lastVelum);
+        }
+    }
+
     static mpc::PluginInfo makeInfo()
     {
         mpc::PluginInfo info;
@@ -336,6 +415,12 @@ private:
     std::atomic<ChimeraMpc*> engine_{nullptr};
     std::atomic<bool> inProcess_{false};
     std::atomic<bool> allOff_{false};
+    std::atomic<int> faceFrame_{0}, velumFrame_{0};
+    std::atomic<uint32_t> processed_{0};
+    std::thread notifier_;
+    std::atomic<bool> quit_{false};
+    std::mutex quitMutex_;
+    std::condition_variable quitCv_;
     double engineRate_ = 0.0;
     float smoothedGain_ = 1.0f;
     bool padSeen_ = false;

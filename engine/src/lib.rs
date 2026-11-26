@@ -21,7 +21,7 @@
 mod close_mic;
 mod worker;
 
-use chimera::anatomy::human::{ArticKey, ArticPatch, BodyMix, NEUTRAL};
+use chimera::anatomy::human::{ArticKey, ArticPatch, BodyMix, HumanArtic, NEUTRAL};
 use chimera::airway::network::{APPROX_KINETIC, APPROX_WALLS};
 use chimera::control::score::{Gesture, Label};
 use chimera::control::singer::Singer;
@@ -239,6 +239,45 @@ impl Pad {
     }
 }
 
+// ---------------------------------------------------------------- the face on the screen
+
+/// The mouth postures the skin's face strip shows, one frame each (tools/make_skin.py draws them
+/// from `examples/dump_face.rs`, which takes this same list): the male body's calibrated vowels,
+/// then the lips closed, and the jaw from closed to wide open.
+pub fn face_postures() -> Vec<HumanArtic> {
+    let mut out = Vec::new();
+    if let Some(t) = vowel_table().get("male") {
+        for v in VOWELS {
+            if let Some(vt) = t.get(v.ipa) {
+                out.push(vt.artic.apply_to(&NEUTRAL));
+            }
+        }
+    }
+    let mut closed = NEUTRAL;
+    closed.lip_ap = -0.2;
+    closed.jaw = 0.35;
+    out.push(closed);
+    for k in 0..6 {
+        let mut a = NEUTRAL;
+        a.jaw = 0.1 + 0.4 * k as f64;
+        out.push(a);
+    }
+    out
+}
+
+/// The soft palate's frames on the screen, from shut to wide open (its parameter's range).
+pub const VELUM_FRAMES: usize = 8;
+pub fn velum_frame_value(i: usize) -> f64 {
+    -0.25 + 1.45 * i as f64 / (VELUM_FRAMES - 1) as f64
+}
+
+/// How far apart two mouth postures look (cm², roughly): the tongue body counts most, then the
+/// jaw and the lips.
+fn posture_distance(a: &HumanArtic, b: &HumanArtic) -> f64 {
+    let d = |x: f64, y: f64, w: f64| (x - y) * (x - y) * w;
+    d(a.tb_x, b.tb_x, 1.0) + d(a.tb_y, b.tb_y, 1.0) + d(a.jaw, b.jaw, 1.5) + d(a.lip_ap, b.lip_ap, 1.0) + d(a.lip_prot, b.lip_prot, 0.6) + d(a.lip_width, b.lip_width, 1.5) + d(a.root, b.root, 0.4)
+}
+
 // ---------------------------------------------------------------- the engine
 
 /// Which voice the engine is playing.
@@ -308,6 +347,7 @@ pub struct ChimeraMpc {
     transport: Transport,
     following: bool,
     close_mic: CloseMic,
+    face: Vec<HumanArtic>,
     failed: bool,
 }
 
@@ -358,6 +398,7 @@ impl ChimeraMpc {
             transport: Transport::default(),
             following: false,
             close_mic: CloseMic::new(fs),
+            face: face_postures(),
             failed: false,
         };
         e.apply_params();
@@ -1187,6 +1228,31 @@ pub extern "C" fn cm_body_ready(h: *const ChimeraMpc) -> i32 {
         Some(mix) => (e.playing == Playing::Blend(mix)) as i32,
         None => (e.playing == Playing::Preset((e.params[p::BODY].round().max(0.0) as usize).min(2))) as i32,
     })
+}
+
+/// What the screen shows now: `out[0]` the face strip's frame (the nearest of `face_postures`),
+/// `out[1]` the soft palate's frame (0..VELUM_FRAMES-1). Cheap; call it once a block.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_display(h: *mut ChimeraMpc, out: *mut i32) {
+    if out.is_null() {
+        return;
+    }
+    guarded(h, |e| {
+        let x = &e.engine.voice().artic.x;
+        let mut best = (f64::INFINITY, 0usize);
+        for (i, a) in e.face.iter().enumerate() {
+            let d = posture_distance(x, a);
+            if d < best.0 {
+                best = (d, i);
+            }
+        }
+        let v = ((x.velum + 0.25) / 1.45 * (VELUM_FRAMES - 1) as f64).round().clamp(0.0, (VELUM_FRAMES - 1) as f64) as i32;
+        // SAFETY: the caller gives room for 2 values
+        unsafe {
+            *out = best.1 as i32;
+            *out.add(1) = v;
+        }
+    });
 }
 
 /// 1 once a panic has silenced the engine.
