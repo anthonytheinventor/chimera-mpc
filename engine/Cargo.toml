@@ -1,0 +1,29 @@
+[package]
+name = "chimera-mpc-engine"
+description = "CHIMERA's voice engine behind a small C interface, for the CHIMERA MPC plugin"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[lib]
+crate-type = ["staticlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# CHIMERA's engine (MIT, Jameson Hodge), the mpc-opt branch: the MPC settings and the NEON airway
+chimera = { path = "../../../../chimera-vocal-synth/crates/chimera" }
+
+[features]
+# NEON loops in the airway step on 32-bit ARM (nightly Rust)
+neon = ["chimera/neon"]
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"
+# unwinding, so every entry point can catch a panic and go silent instead of taking the MPC
+# app down with it
+panic = "unwind"
+debug = false
+
+[workspace]

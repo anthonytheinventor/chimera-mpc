@@ -1,0 +1,17 @@
+{
+  "name": "CHIMERA MPC",
+  "manufacturer": "anthonytheinventor",
+  "version": "1.0.0",
+  "format": "vst2",
+  "kind": "instrument",
+  "uid": "Am6u",
+  "numInputs": 0,
+  "numOutputs": 2,
+  "category": "Synth",
+  "file32": "VST/chimera-mpc-arm32.so",
+  "file64": "VST/chimera-mpc-arm64.so",
+  "description": "CHIMERA's physical-model voice (Jameson Hodge, MIT) on the MPC: a simulated airway sings the notes you play.",
+  "author": "anthonytheinventor",
+  "url": "",
+  "license": "MIT"
+}

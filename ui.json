@@ -1,0 +1,39 @@
+{
+  "pages": [
+    {
+      "name": "PLAY",
+      "controls": [
+        { "param": "Breath",      "widget": "knob" },
+        { "param": "Pressed",     "widget": "knob" },
+        { "param": "Vibrato",     "widget": "knob" },
+        { "param": "Glide",       "widget": "knob" },
+        { "param": "Bright",      "widget": "knob" },
+        { "param": "Breathy",     "widget": "knob" },
+        { "param": "Rough",       "widget": "knob" },
+        { "param": "Fry",         "widget": "knob" },
+        { "param": "Rounding",    "widget": "knob" },
+        { "param": "Lips Open",   "widget": "knob" },
+        { "param": "Protrude",    "widget": "knob" },
+        { "param": "Jaw",         "widget": "knob" },
+        { "param": "Soft Palate", "widget": "knob" },
+        { "param": "Larynx",      "widget": "knob", "polarity": "bipolar" },
+        { "param": "Twang",       "widget": "knob" },
+        { "param": "False Folds", "widget": "knob" }
+      ]
+    },
+    {
+      "name": "SHAPE",
+      "controls": [
+        { "param": "Body",        "widget": "switch" },
+        { "param": "Female",      "widget": "knob", "visibleWhen": { "param": "Body", "choice": "Blend" } },
+        { "param": "Child",       "widget": "knob", "visibleWhen": { "param": "Body", "choice": "Blend" } },
+        { "param": "Gain",        "widget": "fader" },
+        { "param": "Tongue Root", "widget": "knob", "polarity": "bipolar" },
+        { "param": "Tip Curl",    "widget": "knob" },
+        { "param": "Ring",        "widget": "knob" },
+        { "param": "Vib Rate",    "widget": "knob" }
+      ]
+    }
+  ],
+  "style": { "background": "ff1e1d1e", "accent": "ffd31145", "text": "ffffffff", "muted": "ff6a6a6c" }
+}
