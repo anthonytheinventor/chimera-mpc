@@ -1,0 +1,22 @@
+# CHIMERA MPC speech: Speech 1 to 8 are blocks of lines separated by a blank line.
+# Each note says the next line of the chosen block. Lines starting with # are skipped.
+Hello.
+Can you hear me?
+
+I am a voice made of air.
+Every sound comes from a simulated airway.
+
+One, two, three, four.
+
+Yes.
+No.
+Maybe.
+
+Welcome to the machine.
+
+Turn it up.
+Drop the beat.
+
+The quick brown fox jumps over the lazy dog.
+
+Good night.

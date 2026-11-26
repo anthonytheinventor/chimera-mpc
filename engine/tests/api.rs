@@ -157,3 +157,112 @@ fn a_body_change_while_singing_keeps_going() {
     assert_eq!(cm_failed(r.h), 0);
     write_wav("sing_bodies.wav", &r.out);
 }
+
+#[test]
+fn speak_mode_says_lines_at_the_keys_pitch() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 2.0);
+    r.set(p::SPEECH, 1.0); // "I am a voice made of air." / "Every sound comes from a simulated airway."
+    r.wait_for_lyrics();
+    r.out.clear();
+    for note in [60, 67] {
+        cm_note_on(r.h, note, 100);
+        r.render(0.1);
+        cm_note_off(r.h, note);
+        r.render(2.4);
+    }
+    assert!(r.out.iter().all(|x| x.is_finite()));
+    let half = r.out.len() / 2;
+    assert!(rms(&r.out[..half]) > 0.005 && rms(&r.out[half..]) > 0.005, "a line was silent: {} / {}", rms(&r.out[..half]), rms(&r.out[half..]));
+    write_wav("speak_slot2.wav", &r.out);
+}
+
+#[test]
+fn beatbox_plays_its_pattern_pads_and_a_hum() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 3.0);
+    r.wait_for_lyrics();
+    r.out.clear();
+    // the default pattern (Boots and cats) on its own tempo for two bars
+    r.set(p::PLAY_BEAT, 1.0);
+    r.render(5.0);
+    let pattern = rms(&r.out);
+    r.set(p::PLAY_BEAT, 0.0);
+    r.render(0.5);
+    // drum keys, then a hummed note
+    for note in [36, 42, 38, 42, 36, 36, 38, 46] {
+        cm_note_on(r.h, note, 110);
+        r.render(0.25);
+        cm_note_off(r.h, note);
+    }
+    cm_note_on(r.h, 69, 100);
+    r.render(1.2);
+    cm_note_off(r.h, 69);
+    r.render(0.5);
+    assert!(r.out.iter().all(|x| x.is_finite()));
+    assert!(pattern > 0.005, "the pattern was silent: {pattern}");
+    assert_eq!(cm_failed(r.h), 0);
+    write_wav("beatbox.wav", &r.out);
+}
+
+#[test]
+fn a_blend_plays_once_its_voice_is_built() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 1.0);
+    r.set(p::BODY, 3.0);
+    r.set(p::BODY_FEMALE, 0.5);
+    r.set(p::BODY_CHILD, 0.3);
+    let mut ready = false;
+    for _ in 0..400 {
+        r.render(0.025);
+        if cm_body_ready(r.h) == 1 {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    assert!(ready, "the blended voice never arrived");
+    r.out.clear();
+    cm_note_on(r.h, 57, 100);
+    r.render(1.0);
+    cm_note_off(r.h, 57);
+    r.render(0.3);
+    // and back to a preset at once
+    r.set(p::BODY, 0.0);
+    r.render(0.05);
+    assert_eq!(cm_body_ready(r.h), 1);
+    assert!(r.out.iter().all(|x| x.is_finite()) && rms(&r.out) > 0.005);
+    write_wav("play_blend.wav", &r.out);
+}
+
+#[test]
+fn restart_starts_the_lyrics_over_when_the_transport_starts() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 0.0);
+    r.wait_for_lyrics();
+    let sing = |r: &mut Rig, n: usize| {
+        for _ in 0..n {
+            cm_note_on(r.h, 60, 100);
+            r.render(0.2);
+            cm_note_off(r.h, 60);
+            r.render(0.05);
+        }
+    };
+    // three syllables in, then the transport starts: the next note is the first syllable again
+    sing(&mut r, 3);
+    let mark = r.out.len();
+    cm_transport(r.h, 1, 1, 120.0, 1, 0.0, 128);
+    sing(&mut r, 1);
+    let restarted = r.out[mark..].to_vec();
+    // a fresh engine's first note, for comparison
+    let mut f = Rig::new();
+    f.set(p::MODE, 0.0);
+    f.wait_for_lyrics();
+    let fresh_mark = f.out.len();
+    sing(&mut f, 1);
+    let fresh = f.out[fresh_mark..].to_vec();
+    // the same syllable: their spectra are close (both "Hel-"), measured as the level within 3 dB
+    let (a, b) = (rms(&restarted), rms(&fresh));
+    println!("restarted {a:.4}, fresh {b:.4}");
+    assert!((20.0 * (a / b).log10()).abs() < 3.0);
+}

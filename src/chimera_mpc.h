@@ -14,8 +14,8 @@ extern "C" {
 
 typedef struct ChimeraMpc ChimeraMpc;
 
-// content_dir: the plugin's Content folder (lyrics.txt, cmudict.txt.gz), or null. Starts the
-// engine's lyrics thread.
+// content_dir: the plugin's Content folder (lyrics.txt, speech.txt, cmudict.txt.gz), or null.
+// Starts the engine's own thread.
 ChimeraMpc* cm_new(double sample_rate, const char* content_dir);
 void cm_free(ChimeraMpc* engine);
 
@@ -28,6 +28,11 @@ void cm_set_params(ChimeraMpc* engine, const float* values, int n);
 // fwd, tongue up, jaw, lips open, protrude, lip width, tongue root, larynx, tip curl).
 void cm_vowel_posture(ChimeraMpc* engine, float front, float open, float* out9);
 
+// Beat preset `index` (0..6) as the 16 step parameter values, its tempo and swing; 0 if none.
+int cm_beat_preset(int index, float* steps16, float* bpm, float* swing);
+// The host's transport for the block about to render (frames in `samples`).
+void cm_transport(ChimeraMpc* engine, int playing, int bpm_valid, double bpm, int beats_valid, double beats, int samples);
+
 void cm_note_on(ChimeraMpc* engine, int note, int velocity);
 void cm_note_off(ChimeraMpc* engine, int note);
 void cm_all_notes_off(ChimeraMpc* engine);
@@ -36,8 +41,10 @@ void cm_pitch_bend(ChimeraMpc* engine, float bend);
 
 // n mono samples into out.
 void cm_render(ChimeraMpc* engine, float* out, int n);
-// 1 once the lyrics are ready (Sing sings "ah" until then).
+// 1 once the lyrics and spoken lines are ready (Sing sings "ah" until then, Speak is silent).
 int cm_lyrics_ready(const ChimeraMpc* engine);
+// 1 when the voice playing is the body the parameters ask for (a Blend takes a moment).
+int cm_body_ready(const ChimeraMpc* engine);
 int cm_failed(const ChimeraMpc* engine);
 
 #ifdef __cplusplus

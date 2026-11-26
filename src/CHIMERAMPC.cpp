@@ -13,7 +13,14 @@
 //   Play  notes sing one held posture (legato: the last key held sets the pitch; the breath runs
 //         while a key is held or Breathe is on). The articulators shape it, and the vowel pad
 //         (Front, Open) blends CHIMERA's calibrated vowels and writes the result into them.
-//   Speak and Beatbox are not built yet: they play as Play does.
+//   Speak each note says the next line of the chosen text (Content/speech.txt, blocks of lines),
+//         its pitch moved by how far the key is from C3 (up to two octaves either way).
+//   Beatbox the 16-step pattern (Beat picks a preset, which fills the steps), on its own tempo
+//         with Play Beat, or following the MPC's transport with Follow Host; notes below C3 hit
+//         drum sounds (General MIDI's drum map), notes from C3 up hum two octaves down.
+// Body: Male, Female, Child, or Blend (the engine's thread builds a voice for the mix; the
+// previous body plays until it is ready). Restart: Sing and Speak start over at Start Syl and
+// Start Line when the transport starts.
 //
 // Threads: the engine is created in prepare() (it allocates) and swapped in atomically; an old
 // one is freed only once process() has let go of it. reset() only raises a flag that process()
@@ -29,6 +36,7 @@
 #include <cmath>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -73,8 +81,26 @@ enum ParamIndex
     kMpe,           // MPE note channels (not yet)
     kLyrics,        // Sing: lyrics slot 1..8
     kStartSyl,      // Sing: the syllable the lyrics start from
+    kSpeech,        // Speak: text slot 1..8 (Content/speech.txt)
+    kStartLine,     // Speak: the line it starts from
+    kSpeechRate,    // Speak: speed, x
+    kIpa,           // Speak: the text is IPA
+    kSpeak,         // Speak: say the next line (on its rise)
+    kConsonant,     // (reserved: the consonant chart)
+    kPadVowel,      // (reserved)
+    kBeat,          // Beatbox: a preset pattern, or Your Beat
+    kTempo,         // Beatbox: bpm
+    kSwing,         // Beatbox: %
+    kMic,           // Beatbox: the close-mic sound
+    kFollow,        // Beatbox: follow the host's transport
+    kPlayBeat,      // Beatbox: run the pattern on its own tempo
+    kStep1,         // Beatbox: steps 1..16 (rest or a sound)
+    kStep16 = kStep1 + 15,
+    kPad,           // Beatbox: hit a sound now (on its rise)
     kNumParams
 };
+
+const std::vector<std::string> kSounds = {"B", "t", "Pf", "K", "^K", "!", "P!", "tss", "kch", "m"};
 
 constexpr int kChunk = 256;   // frames rendered per engine call
 
@@ -131,6 +157,30 @@ public:
         addParam(mpc::boolParam ("mpe",          "MPE",         false));
         addParam(mpc::choiceParam("lyrics_slot", "Lyrics",      {"1", "2", "3", "4", "5", "6", "7", "8"}, 0));
         addParam(mpc::intParam  ("start_syl",    "Start Syl",   0, 255, 0));
+        addParam(mpc::choiceParam("speech_slot", "Speech",      {"1", "2", "3", "4", "5", "6", "7", "8"}, 0));
+        addParam(mpc::intParam  ("start_line",   "Start Line",  0, 63, 0));
+        addParam(mpc::floatParam("speech_rate",  "Speech Rate", 0.5f, 1.8f, 1.0f, "x", 2));
+        addParam(mpc::boolParam ("ipa",          "IPA",         false));
+        addParam(mpc::boolParam ("speak",        "Speak",       false));
+        addParam(mpc::intParam  ("consonant",    "Consonant",   0, 24, 0));
+        addParam(mpc::choiceParam("pad_vowel",   "Pad Vowel",   {"a", "i", "u"}, 0));
+        addParam(mpc::choiceParam("beat",        "Beat",        {"Boots+Cats", "4 on Floor", "Breakbeat", "Rim Shuffle", "Inward Snr", "Clicks+Pops", "Hum Bass", "Your Beat"}, 0));
+        addParam(mpc::floatParam("tempo",        "Tempo",       60.0f, 240.0f, d[kTempo], "bpm", 0));
+        addParam(mpc::floatParam("swing",        "Swing",       0.0f, 60.0f, d[kSwing] * 100.0f, "%", 0));
+        addParam(mpc::boolParam ("mic",          "Mic FX",      true));
+        addParam(mpc::boolParam ("follow",       "Follow Host", true));
+        addParam(mpc::boolParam ("play_beat",    "Play Beat",   false));
+        std::vector<std::string> stepChoices = {"."};
+        for (const std::string& s : kSounds) stepChoices.push_back(s);
+        for (int i = 0; i < 16; ++i)
+        {
+            const std::string id = "step_" + std::string(i < 9 ? "0" : "") + std::to_string(i + 1);
+            const std::string name = "Step " + std::to_string(i + 1);
+            addParam(mpc::choiceParam(id.c_str(), name.c_str(), stepChoices, (int)d[kStep1 + i]));
+        }
+        std::vector<std::string> padChoices = {"-"};
+        for (const std::string& s : kSounds) padChoices.push_back(s);
+        addParam(mpc::choiceParam("pad",         "Pad",         padChoices, 0));
     }
 
     ~CHIMERAMPC() override
@@ -159,6 +209,7 @@ public:
         allOff_.store(true, std::memory_order_release);
         smoothedGain_ = dbToGain(get(kGain));
         padSeen_ = false;
+        beatSeen_ = false;
     }
 
     void process(mpc::ProcessContext& ctx) override
@@ -173,11 +224,14 @@ public:
         if (allOff_.exchange(false, std::memory_order_acq_rel)) cm_all_notes_off(e);
 
         followVowelPad(e);
+        followBeatPreset();
+        const mpc::Transport& t = ctx.transport;
+        cm_transport(e, t.playing ? 1 : 0, t.tempoValid ? 1 : 0, t.bpm, t.ppqValid ? 1 : 0, t.ppqPos, ctx.numFrames);
 
         // the parameters, in the engine's units (it applies only what changed)
         float v[kNumParams];
         for (int i = 0; i < kNumParams; ++i) v[i] = get(i);
-        for (int i : {kPressed, kBright, kBreathy, kRough, kFry, kRing, kBodyFemale, kBodyChild, kRounding, kTipCurl, kTwang, kFalseFolds, kVowelFront, kVowelOpen})
+        for (int i : {kPressed, kBright, kBreathy, kRough, kFry, kRing, kBodyFemale, kBodyChild, kRounding, kTipCurl, kTwang, kFalseFolds, kVowelFront, kVowelOpen, kSwing})
             v[i] *= 0.01f;
         v[kGlide] *= 0.001f;
         cm_set_params(e, v, kNumParams);
@@ -256,6 +310,20 @@ private:
         }
     }
 
+    // A beat preset was picked: its steps, tempo and swing go into their parameters (as the vowel
+    // pad's posture does). Picking Your Beat, or editing a step, changes nothing else.
+    void followBeatPreset()
+    {
+        const int beat = getInt(kBeat);
+        if (!beatSeen_ || beat == lastBeat_) { beatSeen_ = true; lastBeat_ = beat; return; }
+        lastBeat_ = beat;
+        float steps[16], bpm = 0.0f, swing = 0.0f;
+        if (!cm_beat_preset(beat, steps, &bpm, &swing)) return;
+        for (int i = 0; i < 16; ++i) set(kStep1 + i, steps[i]);
+        set(kTempo, bpm);
+        set(kSwing, swing * 100.0f);
+    }
+
     void handleMidi(ChimeraMpc* e, const mpc::MidiEvent& m)
     {
         if (m.isNoteOn()) cm_note_on(e, m.note(), m.velocity());
@@ -270,6 +338,8 @@ private:
     double engineRate_ = 0.0;
     float smoothedGain_ = 1.0f;
     bool padSeen_ = false;
+    bool beatSeen_ = false;
+    int lastBeat_ = 0;
     float padFront_ = 0.0f, padOpen_ = 0.0f;
     float buf_[kChunk] = {};
 };

@@ -3,32 +3,40 @@
 //!
 //! Threads: `cm_new` and `cm_free` allocate and free, so the plugin calls them outside the audio
 //! callback (`prepare`, the destructor). Everything else runs on the audio thread and allocates
-//! nothing: the three body voices are built in `cm_new` and changing the body swaps one in; the
-//! lyrics are turned into syllables on a thread of their own (the dictionary takes a moment to
-//! load), and the audio thread takes them over by moving them.
+//! nothing: the three preset body voices are built in `cm_new` and changing the body swaps one
+//! in; the engine's own thread (`worker`) loads the dictionary, plans the lyrics and the spoken
+//! lines, builds a blended body's voice, and frees what the audio thread hands back. The audio
+//! thread only `try_lock`s what it shares with that thread.
 //!
 //! Every entry point catches a panic. After one the engine is marked failed and renders silence
 //! from then on, so a bug can never take the MPC app down.
 //!
-//! Modes: Sing (each note sings the next syllable of the chosen lyrics, CHIMERA's Singer) and
-//! Play (notes sing one held posture, legato: the last key held sets the pitch). Speak and
-//! Beatbox are not built yet and play as Play does.
+//! Modes, as CHIMERA's own plugin has them:
+//! - Sing: each note sings the next syllable of the chosen lyrics (CHIMERA's Singer).
+//! - Play: notes sing one held posture, legato (the last key held sets the pitch).
+//! - Speak: each note says the next line of the chosen text, its pitch moved by the key.
+//! - Beatbox: the 16-step sequencer (its own tempo, or following the host's transport); notes
+//!   below C3 hit drum sounds (General MIDI's map), notes from C3 up hum two octaves down.
+
+mod close_mic;
+mod worker;
 
 use chimera::anatomy::human::{ArticKey, ArticPatch, BodyMix, NEUTRAL};
 use chimera::airway::network::{APPROX_KINETIC, APPROX_WALLS};
-use chimera::control::singer::{Singer, syllables_from};
+use chimera::control::score::{Gesture, Label};
+use chimera::control::singer::Singer;
 use chimera::engine::{Engine, default_f0};
-use chimera::math::{exp, ln, midi_to_hz};
-use chimera::phonetics::english::EnglishG2P;
+use chimera::math::{exp, ln, midi_to_hz, pow};
+use chimera::phonetics::beatbox::{BEAT_PRESETS, BeatStep, parse_beat};
 use chimera::phonetics::planner::vowel_table;
 use chimera::phonetics::sing::LiveSyllable;
-use chimera::phonetics::syllables::lyrics_to_syllables;
 use chimera::phonetics::vowel_data::VOWELS;
 use chimera::voice::human_voice::{HumanVoice, SourcePatch, oversample_for};
+use close_mic::CloseMic;
 use std::ffi::{CStr, c_char};
-use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use worker::{Hub, Lyrics, Request, Speech, TRASH_ROOM, Trash};
 
 /// The plugin's parameters, in the plugin's order (`src/CHIMERAMPC.cpp` declares the same list).
 /// Values arrive in plain units.
@@ -67,28 +75,62 @@ pub mod p {
     pub const PITCH: usize = 31; // Hz
     pub const MODE: usize = 32; // 0 Sing, 1 Play, 2 Speak, 3 Beatbox
     pub const BREATHE: usize = 33; // 0/1: Play's held breath without a key
-    pub const RESTART: usize = 34; // 0/1 (not used yet: needs the transport)
+    pub const RESTART: usize = 34; // 0/1: lyrics and lines from their start when the transport starts
     pub const MPE: usize = 35; // 0/1 (not used yet)
     pub const LYRICS: usize = 36; // slot 0..7
     pub const START_SYL: usize = 37; // syllable the lyrics start from
-    pub const COUNT: usize = 38;
+    pub const SPEECH: usize = 38; // slot 0..7
+    pub const START_LINE: usize = 39; // line the speech starts from
+    pub const SPEECH_RATE: usize = 40; // x
+    pub const IPA: usize = 41; // 0/1: the speech text is IPA
+    pub const SPEAK: usize = 42; // momentary: say the next line
+    pub const CONSONANT: usize = 43; // (not used yet: the consonant chart)
+    pub const PAD_VOWEL: usize = 44; // (not used yet)
+    pub const BEAT: usize = 45; // 0..6 a preset, 7 your beat (the C++ side writes a preset's steps)
+    pub const TEMPO: usize = 46; // bpm
+    pub const SWING: usize = 47; // 0..0.6
+    pub const MIC: usize = 48; // 0/1: the close-mic sound in Beatbox
+    pub const FOLLOW: usize = 49; // 0/1: follow the host's transport
+    pub const PLAY_BEAT: usize = 50; // 0/1: the sequencer runs on its own tempo
+    pub const STEP_1: usize = 51; // ..66: 0 rest, 1.. STEP_IDS
+    pub const PAD: usize = 67; // momentary: 0 none, 1.. STEP_IDS
+    pub const COUNT: usize = 68;
 }
 
 const MODE_SING: i32 = 0;
+const MODE_PLAY: i32 = 1;
+const MODE_SPEAK: i32 = 2;
+const MODE_BEATBOX: i32 = 3;
+
+/// The steps' and pads' sounds, after "rest" / "none" (parameter value 0).
+pub const STEP_IDS: [&str; 10] = ["B", "t", "Pf", "K", "^K", "!", "P!", "tss", "kch", "m"];
+const STEPS: usize = 16;
 
 /// Pitch bend range each way (semitones), as CHIMERA's plugin.
 const BEND_RANGE: f64 = 2.0;
-/// Most keys held at once that Play's legato falls back through.
+/// Most keys held at once that legato falls back through.
 const MAX_KEYS: usize = 16;
-/// Lyrics slots (lines of Content/lyrics.txt).
+/// Lyrics and speech slots.
 pub const SLOTS: usize = 8;
 /// What a slot sings before its lyrics are ready, or when it is empty: CHIMERA's default.
-const DEFAULT_LYRICS: &str = "Hello there, I am a voice made of air.";
+pub const DEFAULT_LYRICS: &str = "Hello there, I am a voice made of air.";
+/// Speak: the key that speaks at the body's natural pitch, and how far a key moves it
+/// (semitones); a line's time 0 comes this long after its note (s). As CHIMERA's plugin.
+const SPEECH_ROOT: f64 = 60.0;
+const SPEECH_RANGE: f64 = 24.0;
+const SPEECH_LEAD: f64 = 0.03;
+/// Beatbox: notes from this one up hum, this many semitones down; a hum's tag and longest length;
+/// a pad hit's length (s). As CHIMERA's plugin.
+const HUM_FROM: u8 = 60;
+const HUM_DOWN: u8 = 24;
+const HUM_TAG: f64 = -1.0;
+const HUM_LEN: f64 = 3600.0;
+const BEAT_HIT_LEN: f64 = 0.18;
 
 /// A voice with the MPC settings: 1x at 44.1 and 48 kHz, lean trachea and nose sections,
 /// the geometry every 4 control steps and every 4 samples, no second geometry pass after a
 /// contact correction, the cheaper arithmetic and the single-precision (NEON) airway.
-fn mpc_voice(fs: f64, body: BodyMix) -> Box<HumanVoice> {
+pub(crate) fn mpc_voice(fs: f64, body: BodyMix) -> Box<HumanVoice> {
     let os = if fs >= 40000.0 { 1 } else { oversample_for(fs) };
     let mut v = Box::new(HumanVoice::with_sections(fs, body.body(), os, 2.0, 1.4));
     v.set_anat_every(4);
@@ -102,7 +144,7 @@ fn mpc_voice(fs: f64, body: BodyMix) -> Box<HumanVoice> {
     v
 }
 
-const BODIES: [BodyMix; 3] = [BodyMix::MALE, BodyMix::FEMALE, BodyMix::CHILD];
+pub(crate) const BODIES: [BodyMix; 3] = [BodyMix::MALE, BodyMix::FEMALE, BodyMix::CHILD];
 const BODY_NAMES: [&str; 3] = ["male", "female", "child"];
 
 // ---------------------------------------------------------------- the vowel pad
@@ -112,7 +154,6 @@ const PAD_KEYS: [ArticKey; 9] = [ArticKey::TbX, ArticKey::TbY, ArticKey::Jaw, Ar
 /// The vowels the pad leaves out (Mandarin-only, as CHIMERA's own pad).
 const NOT_ON_THE_MAP: [&str; 4] = ["ɿ", "ʅ", "u̠", "ʊ̠"];
 
-/// A calibrated vowel of one body: its formants and the pad's articulators.
 #[derive(Clone, Copy)]
 struct PadVowel {
     f1: f64,
@@ -161,7 +202,6 @@ impl Pad {
         for (i, v) in self.vowels.iter().enumerate() {
             let d = ((ln(f1 / v.f1) * 2.2).powi(2) + ln(f2 / v.f2).powi(2)).sqrt();
             let w = 1.0 / (d + 0.02).powi(3);
-            // keep the four heaviest, heaviest first
             let mut j = n.min(3);
             if n < 4 {
                 n += 1;
@@ -191,130 +231,129 @@ impl Pad {
     }
 }
 
-// ---------------------------------------------------------------- lyrics, off the audio thread
-
-/// What the lyrics thread hands the audio thread: each slot's syllables (the Singer plans them
-/// for whichever body is playing).
-type Prepared = Vec<Vec<LiveSyllable>>;
-
-#[derive(Default)]
-struct Shared {
-    ready: Mutex<Option<Prepared>>,
-}
-
-/// The lyrics slots of `Content/lyrics.txt`: up to SLOTS non-empty lines, blank and `#` lines
-/// skipped; an empty slot sings CHIMERA's default line.
-fn read_slots(content: &str) -> Vec<String> {
-    let text = std::fs::read_to_string(std::path::Path::new(content).join("lyrics.txt")).unwrap_or_default();
-    let mut slots: Vec<String> = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).take(SLOTS).map(String::from).collect();
-    while slots.len() < SLOTS {
-        slots.push(DEFAULT_LYRICS.to_string());
-    }
-    slots
-}
-
-fn load_g2p(content: &str) -> EnglishG2P {
-    let mut g = EnglishG2P::new();
-    if let Ok(gz) = std::fs::read(std::path::Path::new(content).join("cmudict.txt.gz")) {
-        let mut text = String::new();
-        if flate2::read::GzDecoder::new(&gz[..]).read_to_string(&mut text).is_ok() {
-            g.load_dict(&text);
-        }
-    }
-    // without the dictionary, letter-to-sound rules
-    g
-}
-
-fn prepare_lyrics(content: String, shared: Arc<Shared>) {
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        let g2p = load_g2p(&content);
-        let slots = read_slots(&content);
-        let prepared: Prepared = slots
-            .iter()
-            .map(|text| {
-                let syl = lyrics_to_syllables(text, &g2p);
-                syllables_from(&syl)
-            })
-            .collect();
-        if let Ok(mut r) = shared.ready.lock() {
-            *r = Some(prepared);
-        }
-    }));
-}
-
 // ---------------------------------------------------------------- the engine
+
+/// Which voice the engine is playing.
+#[derive(Clone, Copy, PartialEq)]
+enum Playing {
+    Preset(usize),
+    Blend((f32, f32)),
+}
+
+/// The host's transport this block.
+#[derive(Clone, Copy, Default)]
+struct Transport {
+    playing: bool,
+    bpm: Option<f64>,
+    beats: Option<f64>,
+}
 
 pub struct ChimeraMpc {
     engine: Engine,
-    /// the voices not playing: `spare[i]` holds the voice for BODIES[i], except the playing one's
-    /// slot, which holds whatever voice it was swapped with
-    spare: [Box<HumanVoice>; 3],
-    /// which BODIES entry is playing
-    body: usize,
+    fs: f64,
+    /// the preset voices not playing (the playing one's entry is None)
+    voices: [Option<Box<HumanVoice>>; 3],
+    playing: Playing,
     pads: [Pad; 3],
     singer: Singer,
-    /// each slot's syllables once the lyrics thread is done (moved in, never freed here)
-    slots: Prepared,
-    /// the slot the singer holds (its Vec is in the singer, the slot's entry is empty), or none
+    hub: Arc<Hub>,
+    /// what goes back to the worker to be freed, while the trash is locked (room reserved)
+    to_trash: Vec<Trash>,
+    /// each slot's syllables once ready (moved in, never freed here)
+    lyrics: Lyrics,
+    /// the slot the singer holds (its Vec is in the singer, the slot's entry is empty)
     sung_slot: Option<usize>,
-    /// the Singer's own first lyrics ("ah"), kept here once replaced: dropping them would free
-    /// on the audio thread
+    /// the Singer's own first lyrics ("ah"), parked: dropping them would free on the audio thread
     first_lyrics: Vec<LiveSyllable>,
-    shared: Arc<Shared>,
+    speech: Option<Speech>,
+    speech_cursor: usize,
+    /// the request last sent to the worker
+    sent: Option<Request>,
     params: [f32; p::COUNT],
     /// the parameters as last applied (NaN: never)
     applied: [f32; p::COUNT],
     mode: i32,
     keys: [u8; MAX_KEYS],
     n_keys: usize,
-    bend: f64,
+    /// Beatbox: the keys humming (newest last)
+    hums: [u8; MAX_KEYS],
+    n_hums: usize,
+    wheel: f64,
+    key_bend: f64,
+    transport: Transport,
+    following: bool,
+    close_mic: CloseMic,
     failed: bool,
 }
 
 impl ChimeraMpc {
     fn new(fs: f64, content: Option<String>) -> ChimeraMpc {
         let mut engine = Engine::new(fs);
-        let mut spare = [mpc_voice(fs, BODIES[0]), mpc_voice(fs, BODIES[1]), mpc_voice(fs, BODIES[2])];
-        // the engine's own voice (CHIMERA's default settings) goes into slot 0, and the MPC male
-        // voice plays
-        engine.install_voice(&mut spare[0], BODIES[0]);
-        let shared = Arc::new(Shared::default());
-        if let Some(dir) = content {
-            let s = shared.clone();
-            let _ = std::thread::Builder::new().name("chimera-lyrics".into()).spawn(move || prepare_lyrics(dir, s));
-        }
-        ChimeraMpc {
+        let mut male = mpc_voice(fs, BODIES[0]);
+        // the engine's own first voice (CHIMERA's default settings) is not used: freed here
+        engine.install_voice(&mut male, BODIES[0]);
+        drop(male);
+        let hub = Hub::new();
+        worker::start(hub.clone(), fs, content);
+        let mut e = ChimeraMpc {
             engine,
-            spare,
-            body: 0,
+            fs,
+            voices: [None, Some(mpc_voice(fs, BODIES[1])), Some(mpc_voice(fs, BODIES[2]))],
+            playing: Playing::Preset(0),
             pads: [pad_for(0), pad_for(1), pad_for(2)],
             singer: Singer::new(),
-            slots: Vec::new(),
+            hub,
+            to_trash: Vec::with_capacity(TRASH_ROOM),
+            lyrics: Vec::new(),
             sung_slot: None,
             first_lyrics: Vec::new(),
-            shared,
+            speech: None,
+            speech_cursor: 0,
+            sent: None,
             params: defaults(),
             applied: [f32::NAN; p::COUNT],
             mode: MODE_SING,
             keys: [0; MAX_KEYS],
             n_keys: 0,
-            bend: 1.0,
+            hums: [0; MAX_KEYS],
+            n_hums: 0,
+            wheel: 1.0,
+            key_bend: 1.0,
+            transport: Transport::default(),
+            following: false,
+            close_mic: CloseMic::new(fs),
             failed: false,
+        };
+        e.apply_params();
+        e.send_request();
+        e
+    }
+
+    /// The preset body nearest the voice playing (for the vowel pad and the spoken lines).
+    fn preset(&self) -> usize {
+        match self.playing {
+            Playing::Preset(b) => b,
+            Playing::Blend((f, c)) => {
+                let mix = BodyMix::new(f as f64, c as f64);
+                BODIES.iter().position(|x| x.preset() == Some(mix.nearest())).unwrap_or(0)
+            }
         }
     }
 
-    fn set_body(&mut self, b: usize) {
-        if b == self.body || b >= BODIES.len() {
-            return;
+    /// Play `voice` (built for `what`); the voice it replaces goes back to its slot or out.
+    fn install(&mut self, mut voice: Box<HumanVoice>, what: Playing) {
+        self.stop_notes();
+        let mix = match what {
+            Playing::Preset(b) => BODIES[b],
+            Playing::Blend((f, c)) => BodyMix::new(f as f64, c as f64),
+        };
+        self.engine.install_voice(&mut voice, mix);
+        match self.playing {
+            Playing::Preset(b) => self.voices[b] = Some(voice),
+            Playing::Blend(_) => self.trash(Trash::Voice(voice)),
         }
-        let (cur, next) = (self.body, b);
-        self.singer.stop_all(&mut self.engine);
-        self.engine.install_voice(&mut self.spare[next], BODIES[next]);
-        // spare[next] now holds the voice that was playing (body `cur`): move it to slot `cur`,
-        // whose occupant (the voice swapped out when `cur` started) goes to slot `next`
-        self.spare.swap(cur, next);
-        self.body = next;
-        self.singer.body = BODIES[next];
+        self.playing = what;
+        self.singer.body = mix;
         // the new voice took over the source and posture; the parameters set the rest again
         // (the lyrics stay: the singer keeps its syllables)
         let lyrics = self.applied[p::LYRICS];
@@ -322,55 +361,179 @@ impl ChimeraMpc {
         self.applied[p::LYRICS] = lyrics;
     }
 
-    /// Take the lyrics thread's syllables when they are ready (try_lock: never waits).
-    fn intake(&mut self) {
-        if !self.slots.is_empty() {
-            return;
-        }
-        let Ok(mut r) = self.shared.ready.try_lock() else { return };
-        if let Some(prepared) = r.take() {
-            // a move: the Mutex is left holding None
-            self.slots = prepared;
-            self.sung_slot = None;
-            self.applied[p::LYRICS] = f32::NAN;
+    fn trash(&mut self, t: Trash) {
+        if self.to_trash.len() < TRASH_ROOM {
+            self.to_trash.push(t);
+        } else {
+            // the worker has not taken anything for a long time: leak rather than free here
+            std::mem::forget(t);
         }
     }
 
-    /// The singer sings this slot: its syllables are moved in, the previous slot's moved back.
-    fn sing_slot(&mut self, slot: usize) {
-        if slot >= self.slots.len() || self.sung_slot == Some(slot) {
+    /// Hand the trash to the worker and send it the request, if their locks are free.
+    fn talk_to_worker(&mut self) {
+        if !self.to_trash.is_empty()
+            && let Ok(mut t) = self.hub.trash.try_lock()
+        {
+            while let Some(x) = self.to_trash.pop() {
+                if t.len() == t.capacity() {
+                    self.to_trash.push(x);
+                    break;
+                }
+                t.push(x);
+            }
+        }
+        self.send_request();
+        // what the worker has made
+        let Ok(mut o) = self.hub.out.try_lock() else { return };
+        if self.lyrics.is_empty()
+            && let Some(l) = o.lyrics.take()
+        {
+            self.lyrics = l;
+            self.sung_slot = None;
+            self.applied[p::LYRICS] = f32::NAN;
+        }
+        let speech = o.speech.take();
+        let blend = o.blend.take();
+        drop(o);
+        if let Some(s) = speech {
+            if let Some(old) = self.speech.replace(s) {
+                self.trash(Trash::Speech(old));
+            }
+            self.speech_cursor = self.speech_cursor.min(self.lines_len().saturating_sub(1));
+        }
+        if let Some((mix, v)) = blend {
+            if self.wanted_blend() == Some(mix) && self.playing != Playing::Blend(mix) {
+                self.install(v, Playing::Blend(mix));
+            } else {
+                self.trash(Trash::Voice(v));
+            }
+        }
+    }
+
+    fn wanted_blend(&self) -> Option<(f32, f32)> {
+        (self.params[p::BODY].round() as i32 == 3).then(|| (self.params[p::BODY_FEMALE], self.params[p::BODY_CHILD]))
+    }
+
+    fn send_request(&mut self) {
+        let r = Request { speech_rate: self.params[p::SPEECH_RATE], ipa: self.params[p::IPA] >= 0.5, blend: self.wanted_blend() };
+        if self.sent == Some(r) {
             return;
         }
-        let incoming = core::mem::take(&mut self.slots[slot]);
+        if let Ok(mut q) = self.hub.request.try_lock() {
+            *q = Some(r);
+            self.sent = Some(r);
+        }
+    }
+
+    // --- lyrics and lines
+
+    fn sing_slot(&mut self, slot: usize) {
+        if slot >= self.lyrics.len() || self.sung_slot == Some(slot) {
+            return;
+        }
+        let incoming = core::mem::take(&mut self.lyrics[slot]);
         if incoming.is_empty() {
             return;
         }
         let outgoing = self.singer.set_syllables(incoming);
         match self.sung_slot {
-            Some(prev) => self.slots[prev] = outgoing,
+            Some(prev) => self.lyrics[prev] = outgoing,
             None => self.first_lyrics = outgoing,
         }
         self.sung_slot = Some(slot);
     }
 
+    fn speech_slot(&self) -> usize {
+        (self.params[p::SPEECH].round().max(0.0) as usize).min(SLOTS - 1)
+    }
+
+    fn lines_len(&self) -> usize {
+        self.speech.as_ref().map_or(0, |s| s[self.speech_slot()][self.preset()].len())
+    }
+
+    /// Say the next line at this pitch ratio (the whole contour moves through the bend).
+    fn say_next(&mut self, key_bend: f64) {
+        let (slot, b) = (self.speech_slot(), self.preset());
+        let n = self.speech.as_ref().map_or(0, |s| s[slot][b].len());
+        if n == 0 {
+            return;
+        }
+        let i = self.speech_cursor % n;
+        self.key_bend = key_bend;
+        self.update_bend();
+        if let Some(s) = self.speech.as_ref() {
+            let g: &[Gesture] = &s[slot][b][i];
+            self.engine.schedule(g, SPEECH_LEAD, true);
+        }
+        self.speech_cursor = (i + 1) % n;
+    }
+
+    // --- beatbox
+
+    fn beat_step(&self, i: usize) -> Option<BeatStep> {
+        let k = self.params[p::STEP_1 + i].round() as usize;
+        (1..=STEP_IDS.len()).contains(&k).then(|| BeatStep { id: Label::new(STEP_IDS[k - 1]), note: None, accent: None })
+    }
+
+    fn beat_time(&mut self, id: &str) -> f64 {
+        let wait = self.engine.beat_lead(id);
+        self.engine.clock() + wait
+    }
+
+    fn beat_hit(&mut self, id: &str, accent: f64) {
+        let step = BeatStep { id: Label::new(id), note: None, accent: Some(accent) };
+        let hit = self.beat_time(id);
+        self.engine.beat_hit_at(&step, hit, BEAT_HIT_LEN, None);
+    }
+
+    fn start_hum(&mut self, midi: u8, accent: f64) {
+        let hit = self.beat_time("m");
+        self.engine.release_at(HUM_TAG, hit);
+        let step = BeatStep { id: Label::new("m"), note: Some((midi.saturating_sub(HUM_DOWN)) as f64), accent: Some(accent) };
+        self.engine.beat_hit_at(&step, hit, HUM_LEN, Some(HUM_TAG));
+    }
+
+    fn stop_hum(&mut self) {
+        let t = self.beat_time("m");
+        self.engine.release_at(HUM_TAG, t);
+    }
+
+    fn follow_beat(&mut self, samples: usize) {
+        let t = self.transport;
+        let host = (self.mode == MODE_BEATBOX && self.params[p::FOLLOW] >= 0.5 && t.playing).then_some(()).and(t.beats.zip(t.bpm)).filter(|(_, bpm)| *bpm > 0.0);
+        match host {
+            Some((beats, bpm)) => {
+                if !self.following {
+                    self.engine.set_beat_playing(false);
+                    self.following = true;
+                }
+                let end = beats + samples as f64 / self.fs * bpm / 60.0;
+                self.engine.beat_follow(beats, end, bpm, 0.0);
+            }
+            None if self.following => {
+                self.following = false;
+                self.engine.beat_stop_following();
+                self.engine.set_beat_tempo(Some(self.params[p::TEMPO] as f64), None);
+                self.engine.set_beat_playing(self.mode == MODE_BEATBOX && self.params[p::PLAY_BEAT] >= 0.5);
+            }
+            None => {}
+        }
+    }
+
+    // --- parameters
+
     fn apply_params(&mut self) {
         let q = self.params;
         let was = self.applied;
         let changed = |i: usize| q[i].to_bits() != was[i].to_bits();
+        // body: a preset at once; a blend once the worker has built its voice
         if changed(p::BODY) || changed(p::BODY_FEMALE) || changed(p::BODY_CHILD) {
-            let b = match q[p::BODY].round() as i32 {
-                1 => 1,
-                2 => 2,
-                3 => {
-                    let mix = BodyMix::new(q[p::BODY_FEMALE] as f64, q[p::BODY_CHILD] as f64);
-                    BODIES.iter().position(|x| x.preset() == Some(mix.nearest())).unwrap_or(0)
-                }
-                _ => 0,
-            };
-            if b != self.body {
-                self.set_body(b);
-                if self.n_keys > 0 && self.mode != MODE_SING {
-                    self.engine.set_source(&SourcePatch::f0(midi_to_hz(self.keys[self.n_keys - 1] as f64)));
+            let b = q[p::BODY].round() as i32;
+            if (0..3).contains(&b) && self.playing != Playing::Preset(b as usize) {
+                let b = b as usize;
+                if let Some(v) = self.voices[b].take() {
+                    self.install(v, Playing::Preset(b));
                 }
             }
         }
@@ -380,15 +543,16 @@ impl ChimeraMpc {
             let m = q[p::MODE].round() as i32;
             if m != self.mode {
                 // a mode change ends whatever was sounding
-                self.singer.stop_all(&mut self.engine);
-                self.n_keys = 0;
+                self.stop_notes();
                 self.mode = m;
+                self.key_bend = 1.0;
+                self.update_bend();
             }
         }
         let source = [p::BREATH, p::PRESSED, p::BRIGHT, p::GLIDE, p::BREATHY, p::ROUGH, p::FRY, p::VIBRATO, p::VIBRATO_RATE, p::WHISPER, p::MODE];
         if source.iter().any(|&i| changed(i)) {
             // while singing, the notes' own gestures carry the vibrato (as CHIMERA's plugin)
-            let depth = if self.mode == MODE_SING { 0.0 } else { q[p::VIBRATO] as f64 };
+            let depth = if self.mode == MODE_PLAY { q[p::VIBRATO] as f64 } else { 0.0 };
             self.singer.vibrato = q[p::VIBRATO] as f64;
             self.engine.set_source(&SourcePatch {
                 pressure: Some(q[p::BREATH] as f64),
@@ -429,7 +593,7 @@ impl ChimeraMpc {
             }
             self.engine.set_artic(&a, Some(tip_free));
         }
-        if changed(p::PITCH) && !was[p::PITCH].is_nan() && self.mode != MODE_SING {
+        if changed(p::PITCH) && !was[p::PITCH].is_nan() && self.mode == MODE_PLAY {
             // the Pitch control sets the pitch, as a key does (the last one moved wins)
             self.engine.set_source(&SourcePatch::f0(q[p::PITCH] as f64));
         }
@@ -439,6 +603,32 @@ impl ChimeraMpc {
         if changed(p::START_SYL) || changed(p::LYRICS) {
             self.singer.set_cursor(q[p::START_SYL].round().max(0.0) as usize);
         }
+        if changed(p::SPEECH) || changed(p::START_LINE) {
+            self.speech_cursor = q[p::START_LINE].round().max(0.0) as usize;
+        }
+        if changed(p::SPEAK) && q[p::SPEAK] >= 0.5 && was[p::SPEAK] < 0.5 && self.mode == MODE_SPEAK {
+            self.say_next(1.0);
+        }
+        // the sequencer
+        if (p::STEP_1..p::STEP_1 + STEPS).any(changed) {
+            let mut steps = [None; STEPS];
+            for (i, s) in steps.iter_mut().enumerate() {
+                *s = self.beat_step(i);
+            }
+            self.engine.set_beat_steps(&steps);
+        }
+        if changed(p::TEMPO) || changed(p::SWING) {
+            self.engine.set_beat_tempo(Some(q[p::TEMPO] as f64), Some(q[p::SWING] as f64));
+        }
+        if (changed(p::PLAY_BEAT) || changed(p::MODE)) && !self.following {
+            self.engine.set_beat_playing(self.mode == MODE_BEATBOX && q[p::PLAY_BEAT] >= 0.5);
+        }
+        if changed(p::PAD) && q[p::PAD] >= 0.5 && self.mode == MODE_BEATBOX {
+            let k = q[p::PAD].round() as usize;
+            if (1..=STEP_IDS.len()).contains(&k) {
+                self.beat_hit(STEP_IDS[k - 1], 1.0);
+            }
+        }
         if changed(p::BREATHE) || changed(p::MODE) {
             self.update_gate();
         }
@@ -446,41 +636,82 @@ impl ChimeraMpc {
     }
 
     fn update_gate(&mut self) {
-        if self.mode == MODE_SING {
-            return; // the singer breathes with its notes
+        if self.mode != MODE_PLAY {
+            return; // Sing, Speak and Beatbox breathe with their gestures
         }
         let on = self.n_keys > 0 || self.params[p::BREATHE] >= 0.5;
         self.engine.set_gate(if on { 1.0 } else { 0.0 });
     }
 
+    fn update_bend(&mut self) {
+        self.engine.set_bend(self.key_bend * self.wheel);
+    }
+
+    // --- notes
+
     fn note_on(&mut self, note: u8, velocity: u8) {
         self.apply_params();
-        if self.mode == MODE_SING {
-            self.singer.note_on(&mut self.engine, note, velocity as f64);
-            return;
+        match self.mode {
+            MODE_SING => self.singer.note_on(&mut self.engine, note, velocity as f64),
+            MODE_SPEAK => {
+                let semitones = (note as f64 - SPEECH_ROOT).clamp(-SPEECH_RANGE, SPEECH_RANGE);
+                self.say_next(pow(2.0, semitones / 12.0));
+            }
+            MODE_BEATBOX => {
+                let accent = (velocity as f64 / 100.0).clamp(0.4, 1.25);
+                if note >= HUM_FROM {
+                    self.remove_hum(note);
+                    if self.n_hums < MAX_KEYS {
+                        self.hums[self.n_hums] = note;
+                        self.n_hums += 1;
+                    }
+                    self.start_hum(note, accent);
+                } else if let Some(id) = drum_pad(note) {
+                    self.beat_hit(id, accent);
+                }
+            }
+            _ => {
+                self.remove_key(note);
+                if self.n_keys == MAX_KEYS {
+                    self.keys.copy_within(1.., 0);
+                    self.n_keys -= 1;
+                }
+                self.keys[self.n_keys] = note;
+                self.n_keys += 1;
+                self.engine.set_source(&SourcePatch::f0(midi_to_hz(note as f64)));
+                self.update_gate();
+            }
         }
-        self.remove_key(note);
-        if self.n_keys == MAX_KEYS {
-            self.keys.copy_within(1.., 0);
-            self.n_keys -= 1;
-        }
-        self.keys[self.n_keys] = note;
-        self.n_keys += 1;
-        self.engine.set_source(&SourcePatch::f0(midi_to_hz(note as f64)));
-        self.update_gate();
     }
 
     fn note_off(&mut self, note: u8) {
-        if self.mode == MODE_SING {
-            self.singer.note_off(&mut self.engine, note);
-            return;
+        match self.mode {
+            MODE_SING => self.singer.note_off(&mut self.engine, note),
+            // a line is a one-shot: it ends by itself, or when the next one cuts it
+            MODE_SPEAK => {}
+            MODE_BEATBOX => {
+                if note < HUM_FROM {
+                    return;
+                }
+                let was_top = self.n_hums > 0 && self.hums[self.n_hums - 1] == note;
+                self.remove_hum(note);
+                if was_top {
+                    if self.n_hums > 0 {
+                        self.start_hum(self.hums[self.n_hums - 1], 1.0);
+                    } else {
+                        self.stop_hum();
+                    }
+                }
+            }
+            _ => {
+                self.remove_key(note);
+                if self.n_keys > 0 {
+                    // legato: back to the most recent key still held
+                    self.engine.set_source(&SourcePatch::f0(midi_to_hz(self.keys[self.n_keys - 1] as f64)));
+                }
+                self.update_gate();
+            }
         }
-        self.remove_key(note);
-        if self.n_keys > 0 {
-            // legato: back to the most recent key still held
-            self.engine.set_source(&SourcePatch::f0(midi_to_hz(self.keys[self.n_keys - 1] as f64)));
-        }
-        self.update_gate();
     }
 
     fn remove_key(&mut self, note: u8) {
@@ -490,23 +721,90 @@ impl ChimeraMpc {
         }
     }
 
-    fn all_off(&mut self) {
+    fn remove_hum(&mut self, note: u8) {
+        if let Some(i) = self.hums[..self.n_hums].iter().position(|&k| k == note) {
+            self.hums.copy_within(i + 1..self.n_hums, i);
+            self.n_hums -= 1;
+        }
+    }
+
+    /// Stop everything the keys are doing (mode change, transport stop, all notes off).
+    fn stop_notes(&mut self) {
         self.singer.stop_all(&mut self.engine);
         self.n_keys = 0;
+        if self.mode == MODE_SPEAK {
+            self.engine.stop_speech();
+            self.key_bend = 1.0;
+            self.update_bend();
+        }
+        if self.mode == MODE_BEATBOX && self.n_hums > 0 {
+            self.n_hums = 0;
+            let now = self.engine.clock();
+            self.engine.release_at(HUM_TAG, now);
+        }
         self.update_gate();
     }
 
+    fn set_transport(&mut self, t: Transport, samples: usize) {
+        let was = self.transport;
+        let started = t.playing && !was.playing;
+        let jumped = t.playing && was.playing && matches!((t.beats, was.beats), (Some(now), Some(last)) if now < last - 1e-3);
+        self.transport = t;
+        if (started || jumped) && self.params[p::RESTART] >= 0.5 {
+            self.singer.set_cursor(self.params[p::START_SYL].round().max(0.0) as usize);
+            self.speech_cursor = self.params[p::START_LINE].round().max(0.0) as usize;
+        }
+        if was.playing && !t.playing {
+            self.stop_notes();
+        }
+        self.follow_beat(samples);
+    }
+
     fn render(&mut self, out: &mut [f32]) {
-        self.intake();
+        self.talk_to_worker();
         self.apply_params();
-        self.engine.set_bend(self.bend);
         self.engine.render(out);
+        if self.mode == MODE_BEATBOX && self.params[p::MIC] >= 0.5 {
+            self.close_mic.process(out);
+        }
         for x in out.iter_mut() {
             if !x.is_finite() {
                 *x = 0.0;
             }
         }
     }
+}
+
+impl Drop for ChimeraMpc {
+    fn drop(&mut self) {
+        self.hub.quit.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// General MIDI's drum keys -> beatbox sounds, as CHIMERA's plugin maps them.
+pub fn drum_pad(midi: u8) -> Option<&'static str> {
+    Some(match midi {
+        35 | 36 => "B",
+        37 => "K",
+        38 => "Pf",
+        39 => "!",
+        40 => "^K",
+        41 | 43 | 45 | 47 | 48 | 50 => "P!",
+        42 | 44 | 51 | 53 | 59 => "t",
+        46 => "tss",
+        49 | 52 | 55 | 57 => "kch",
+        _ => return None,
+    })
+}
+
+/// A beat preset as step parameter values (0 rest, 1.. STEP_IDS), with its tempo and swing.
+pub fn preset_steps(i: usize) -> Option<([f32; STEPS], f32, f32)> {
+    let pr = BEAT_PRESETS.get(i)?;
+    let mut out = [0.0f32; STEPS];
+    for (o, s) in out.iter_mut().zip(parse_beat(pr.text)) {
+        *o = s.and_then(|s| STEP_IDS.iter().position(|id| *id == s.id.as_str())).map_or(0.0, |k| (k + 1) as f32);
+    }
+    Some((out, pr.bpm as f32, pr.swing as f32))
 }
 
 /// CHIMERA's own defaults (the voice source's) and the neutral posture, in parameter order.
@@ -552,6 +850,22 @@ fn defaults() -> [f32; p::COUNT] {
     d[p::MPE] = 0.0;
     d[p::LYRICS] = 0.0;
     d[p::START_SYL] = 0.0;
+    d[p::SPEECH] = 0.0;
+    d[p::START_LINE] = 0.0;
+    d[p::SPEECH_RATE] = 1.0;
+    d[p::IPA] = 0.0;
+    d[p::SPEAK] = 0.0;
+    d[p::CONSONANT] = 0.0;
+    d[p::PAD_VOWEL] = 0.0;
+    d[p::BEAT] = 0.0;
+    let (steps, bpm, swing) = preset_steps(0).unwrap_or(([0.0; STEPS], 96.0, 0.0));
+    d[p::TEMPO] = bpm;
+    d[p::SWING] = swing;
+    d[p::MIC] = 1.0;
+    d[p::FOLLOW] = 1.0;
+    d[p::PLAY_BEAT] = 0.0;
+    d[p::STEP_1..p::STEP_1 + STEPS].copy_from_slice(&steps);
+    d[p::PAD] = 0.0;
     d
 }
 
@@ -570,8 +884,8 @@ fn guarded(h: *mut ChimeraMpc, f: impl FnOnce(&mut ChimeraMpc)) {
 }
 
 /// A new engine at this sample rate, or null. `content_dir` (or null) is the plugin's Content
-/// folder, with `lyrics.txt` and `cmudict.txt.gz`. Allocates and starts the lyrics thread: call it
-/// outside the audio callback.
+/// folder, with `lyrics.txt`, `speech.txt` and `cmudict.txt.gz`. Allocates and starts the
+/// engine's thread: call it outside the audio callback.
 #[unsafe(no_mangle)]
 pub extern "C" fn cm_new(sample_rate: f64, content_dir: *const c_char) -> *mut ChimeraMpc {
     if !(sample_rate.is_finite() && sample_rate > 8000.0) {
@@ -615,6 +929,14 @@ pub extern "C" fn cm_set_params(h: *mut ChimeraMpc, values: *const f32, n: i32) 
     guarded(h, |e| e.params[..v.len()].copy_from_slice(v));
 }
 
+/// The host's transport for the block about to render (`samples` frames). `beats` is the song
+/// position in quarter notes when `beats_valid`; `bpm` when `bpm_valid`.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_transport(h: *mut ChimeraMpc, playing: i32, bpm_valid: i32, bpm: f64, beats_valid: i32, beats: f64, samples: i32) {
+    let t = Transport { playing: playing != 0, bpm: (bpm_valid != 0 && bpm.is_finite()).then_some(bpm), beats: (beats_valid != 0 && beats.is_finite()).then_some(beats) };
+    guarded(h, |e| e.set_transport(t, samples.max(0) as usize));
+}
+
 /// The vowel pad's posture at (front, open), 0..1 each, for the body playing: 9 values into
 /// `out`, in the order tongue fwd, tongue up, jaw, lips open, protrude, lip width (1 - rounding),
 /// tongue root, larynx, tip curl.
@@ -624,13 +946,34 @@ pub extern "C" fn cm_vowel_posture(h: *mut ChimeraMpc, front: f32, open: f32, ou
         return;
     }
     guarded(h, |e| {
-        let a = e.pads[e.body].posture(front as f64, open as f64);
+        let a = e.pads[e.preset()].posture(front as f64, open as f64);
         // SAFETY: the caller gives room for 9 values
         let o = unsafe { std::slice::from_raw_parts_mut(out, 9) };
         for (o, x) in o.iter_mut().zip(a.iter()) {
             *o = *x as f32;
         }
     });
+}
+
+/// Beat preset `index` as the 16 step parameter values, its tempo and swing. Returns 0 when there
+/// is no such preset.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_beat_preset(index: i32, steps16: *mut f32, bpm: *mut f32, swing: *mut f32) -> i32 {
+    if steps16.is_null() || bpm.is_null() || swing.is_null() || index < 0 {
+        return 0;
+    }
+    match catch_unwind(|| preset_steps(index as usize)) {
+        Ok(Some((s, b, w))) => {
+            // SAFETY: the caller gives room for 16 values and one each
+            unsafe {
+                std::ptr::copy_nonoverlapping(s.as_ptr(), steps16, STEPS);
+                *bpm = b;
+                *swing = w;
+            }
+            1
+        }
+        _ => 0,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -654,14 +997,17 @@ pub extern "C" fn cm_note_off(h: *mut ChimeraMpc, note: i32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn cm_all_notes_off(h: *mut ChimeraMpc) {
-    guarded(h, |e| e.all_off());
+    guarded(h, |e| e.stop_notes());
 }
 
 /// Pitch bend, -1..1 (the wheel's range is ±2 semitones).
 #[unsafe(no_mangle)]
 pub extern "C" fn cm_pitch_bend(h: *mut ChimeraMpc, bend: f32) {
     let b = if bend.is_finite() { bend.clamp(-1.0, 1.0) as f64 } else { 0.0 };
-    guarded(h, |e| e.bend = chimera::math::pow(2.0, b * BEND_RANGE / 12.0));
+    guarded(h, |e| {
+        e.wheel = pow(2.0, b * BEND_RANGE / 12.0);
+        e.update_bend();
+    });
 }
 
 /// Render `n` mono samples into `out` (silence once the engine has failed).
@@ -680,11 +1026,21 @@ pub extern "C" fn cm_render(h: *mut ChimeraMpc, out: *mut f32, n: i32) {
     }
 }
 
-/// 1 once the lyrics are ready (Sing sings CHIMERA's default "ah" until then).
+/// 1 once the lyrics and spoken lines are ready (Sing sings "ah" until then, Speak is silent).
 #[unsafe(no_mangle)]
 pub extern "C" fn cm_lyrics_ready(h: *const ChimeraMpc) -> i32 {
     // SAFETY: as in guarded
-    unsafe { h.as_ref() }.map_or(0, |e| (!e.slots.is_empty()) as i32)
+    unsafe { h.as_ref() }.map_or(0, |e| (!e.lyrics.is_empty() && e.speech.is_some()) as i32)
+}
+
+/// 1 when the voice playing is the one the Body parameters ask for (a blend takes a moment).
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_body_ready(h: *const ChimeraMpc) -> i32 {
+    // SAFETY: as in guarded
+    unsafe { h.as_ref() }.map_or(0, |e| match e.wanted_blend() {
+        Some(mix) => (e.playing == Playing::Blend(mix)) as i32,
+        None => (e.playing == Playing::Preset((e.params[p::BODY].round().max(0.0) as usize).min(2))) as i32,
+    })
 }
 
 /// 1 once a panic has silenced the engine.
