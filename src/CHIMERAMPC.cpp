@@ -224,6 +224,23 @@ public:
         addParam(typed);
         texts_ = cm_texts_new();
 
+        // Built-in programs: voices only. Each sets parameters 0-13 (Gain, the voice source, the
+        // body) and leaves the mode, words, mouth posture and beat alone (a program's missing
+        // values are left as they are). Gains level-match the presets; Gain comes after the
+        // engine's limiter (ceiling 0.75), so a boost stays small enough to keep peaks under 1.
+        // engine/examples/presets.rs renders and measures them (keep its list the same).
+        //          Gain  Breath Press Bright Glide Brthy Rough Fry  Ring  Vib  Rate Body Fem  Child
+        addProgram("Init", {0.0f, d[kBreath], d[kPressed] * 100.0f, d[kBright] * 100.0f, d[kGlide] * 1000.0f,
+                            d[kBreathy] * 100.0f, d[kRough] * 100.0f, d[kFry] * 100.0f, 0.0f, d[kVibrato], d[kVibRate],
+                            0.0f, 50.0f, 0.0f});
+        addProgram("Natural", {-1.0f, 8.0f, 45.0f, 30.0f, 40.0f, 12.0f, 5.0f, 0.0f, 0.0f, 15.0f, 5.5f, 0.0f, 50.0f, 0.0f});
+        addProgram("Breathy", { 2.0f, 6.0f, 20.0f, 15.0f, 80.0f, 60.0f, 0.0f, 0.0f, 0.0f, 25.0f, 5.5f, 1.0f, 50.0f, 0.0f});
+        addProgram("Belt",    { 0.0f, 14.0f, 80.0f, 65.0f, 50.0f, 3.0f, 15.0f, 0.0f, 30.0f, 25.0f, 5.8f, 0.0f, 50.0f, 0.0f});
+        addProgram("Opera",   {-2.0f, 12.0f, 60.0f, 45.0f, 90.0f, 5.0f, 0.0f, 0.0f, 80.0f, 70.0f, 5.8f, 0.0f, 50.0f, 0.0f});
+        addProgram("Airy",    { 3.0f, 5.0f, 15.0f, 10.0f, 120.0f, 75.0f, 0.0f, 0.0f, 0.0f, 20.0f, 5.0f, 1.0f, 50.0f, 0.0f});
+        addProgram("Rough",   { 0.0f, 11.0f, 70.0f, 40.0f, 40.0f, 10.0f, 70.0f, 20.0f, 0.0f, 10.0f, 5.5f, 0.0f, 50.0f, 0.0f});
+        addProgram("Child",   { 2.0f, 7.0f, 45.0f, 40.0f, 50.0f, 20.0f, 0.0f, 0.0f, 0.0f, 20.0f, 6.0f, 2.0f, 50.0f, 0.0f});
+
         // The helper thread puts the face on the screen (see notifierMain). Without it the plugin
         // still plays; the face then stands still.
         try { notifier_ = std::thread(&CHIMERAMPC::notifierMain, this); }

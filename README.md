@@ -80,6 +80,16 @@ page's main action (Breathe, Speak, Play Beat).
   moment: the previous body keeps playing until it is ready.
 - A step's **m** (hum) plays at a fixed pitch; the Hum Bass pattern's own hum notes are not kept.
 
+## Presets
+
+Eight built-in voices, in the MPC's preset list: **Init** (CHIMERA's own defaults), **Natural**,
+**Breathy**, **Belt**, **Opera**, **Airy**, **Rough** and **Child**. A preset sets the voice and the
+body (Gain through Child, the first 14 parameters) and leaves the mode, your words, the mouth's shape
+and the beat as they are, so you can change voices in the middle of a song. Breathy and Airy use the
+female body and Child the child body; the others use the male body. Your own settings, words and beat
+included, are saved with MPC presets of your own (save one from the plugin's preset menu).
+`engine/examples/presets.rs` renders each preset singing and holding a vowel, with its loudness.
+
 ## How it fits on a 32-bit MPC
 
 CHIMERA's engine is unchanged in what it models. To fit, the engine runs the airway at the
