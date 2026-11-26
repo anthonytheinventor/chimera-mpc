@@ -66,6 +66,9 @@ int cm_body_ready(const ChimeraMpc* engine);
 // out[2] the last drum sound heard (0 none, 1..10 as the Pad parameter), out[3] a count that
 // moves at every hit.
 void cm_display(ChimeraMpc* engine, int* out4);
+// A tap on a momentary control: parameter index (Key, Pad, Consonant or Speak) and the step it was
+// set to. The audio thread; those parameters then go to cm_set_params as 0.
+void cm_tap(ChimeraMpc* engine, int index, int value);
 int cm_failed(const ChimeraMpc* engine);
 
 #ifdef __cplusplus

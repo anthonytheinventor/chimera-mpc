@@ -557,3 +557,34 @@ fn the_keyboard_does_not_type_while_the_sequence_plays() {
     }
     assert_ne!(cm_text_preview(r.h, buf.as_mut_ptr(), 64), during, "a tap did not type while stopped");
 }
+
+#[test]
+fn breathe_off_in_play_stops_the_voice() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 1.0);
+    r.render(0.3);
+    r.set(p::BREATHE, 1.0);
+    r.render(1.0);
+    assert!(rms(&r.out[r.out.len() - 4410..]) > 0.005, "Breathe makes no sound");
+    r.set(p::BREATHE, 0.0);
+    r.render(0.6);
+    r.out.clear();
+    r.render(0.3);
+    assert!(rms(&r.out) < 1e-3, "the voice goes on after Breathe is off: {}", rms(&r.out));
+}
+
+#[test]
+fn a_tap_types_even_when_the_key_never_reaches_a_block() {
+    let mut r = Rig::new();
+    r.render(0.3);
+    let mut buf = [0u8; 64];
+    let before = cm_text_preview(r.h, buf.as_mut_ptr(), 64);
+    // the plugin hands the tap over directly; the Key parameter itself stays 0
+    cm_tap(r.h, p::KEY as i32, key_of('h') as i32);
+    r.render(0.05);
+    let after = cm_text_preview(r.h, buf.as_mut_ptr(), 64);
+    assert_ne!(before, after, "the tap did not type");
+    let n = buf.iter().position(|&b| b == 0).unwrap_or(64);
+    let text = std::str::from_utf8(&buf[..n]).unwrap();
+    assert!(text.ends_with("h_"), "typed text: {text}");
+}

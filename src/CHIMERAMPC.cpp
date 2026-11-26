@@ -117,6 +117,11 @@ constexpr int kEngineParams = kKey + 1;   // the engine reads 0..kKey (engine/sr
 
 bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit; }
 
+// The momentary controls: a tap sets one and the MPC puts it back to 0 when the finger lifts, which
+// with a quick tap can happen before the next block reads it. Their taps are caught as the host
+// sets them (parameterChanged) and handed to the engine (cm_tap).
+bool isTap(int i) { return i == kKey || i == kPad || i == kConsonant || i == kSpeak; }
+
 constexpr int kFaceFrames = 33;    // engine/src/lib.rs face_postures()
 constexpr int kVelumFrames = 8;    // engine/src/lib.rs VELUM_FRAMES
 constexpr int kLookMs = 50;        // the helper thread looks this often
@@ -268,6 +273,21 @@ public:
         cm_texts_free(texts_);
     }
 
+    // A tap on a momentary control, as the host sets it (any thread): queued for process(). A rise
+    // to a step, or a move to another step, is a tap; the same value sent again is not (automation
+    // may resend it), and the return to 0 only re-arms it.
+    void parameterChanged(int index, float plainValue) override
+    {
+        if (!isTap(index)) return;
+        const int step = (int)std::lround(plainValue);
+        const int was = tapLast_[tapSlot(index)].exchange(step, std::memory_order_acq_rel);
+        if (step < 1 || step == was) return;
+        const uint32_t w = tapWrite_.fetch_add(1, std::memory_order_acq_rel);
+        // a full queue drops the tap rather than overwrite one not yet taken
+        int32_t empty = 0;
+        tapQueue_[w % kTapQueue].compare_exchange_strong(empty, (int32_t)((index << 8) | step), std::memory_order_release);
+    }
+
     // The typed slot's end, as the Typed parameter's text (the host's thread).
     bool formatValue(int index, float plainValue, std::string& out) override
     {
@@ -318,6 +338,11 @@ public:
         beatSeen_ = false;
         slotsSeen_ = false;
         hitDark_.store(true, std::memory_order_release);   // the helper thread darkens the pads
+        // a state load sets the momentary controls too (to whatever was saved): those are not taps.
+        // reset() runs before the next block after a load (or on resume), so the queue is cleared
+        // of them here
+        tapRead_ = tapWrite_.load(std::memory_order_acquire);
+        for (std::atomic<int32_t>& t : tapQueue_) t.store(0, std::memory_order_relaxed);
     }
 
     void process(mpc::ProcessContext& ctx) override
@@ -343,8 +368,20 @@ public:
         for (int i : {kPressed, kBright, kBreathy, kRough, kFry, kRing, kBodyFemale, kBodyChild, kRounding, kTipCurl, kTwang, kFalseFolds, kVowelFront, kVowelOpen, kSwing})
             v[i] *= 0.01f;
         v[kGlide] *= 0.001f;
+        for (int i : {kKey, kPad, kConsonant, kSpeak}) v[i] = 0.0f;   // they come as taps (below)
         cm_set_params(e, v, kEngineParams);
         if (settle_.exchange(false, std::memory_order_acq_rel)) cm_settle(e);
+        // the taps caught since the last block, in order
+        // (the reader follows the write count: a slot left empty, by a tap dropped from a full
+        // queue, is passed over instead of holding up the ones after it)
+        const uint32_t written = tapWrite_.load(std::memory_order_acquire);
+        if (written - tapRead_ > (uint32_t)kTapQueue) tapRead_ = written - kTapQueue;
+        while (tapRead_ != written)
+        {
+            const int32_t t = tapQueue_[tapRead_ % kTapQueue].exchange(0, std::memory_order_acquire);
+            ++tapRead_;
+            if (t != 0) cm_tap(e, t >> 8, t & 0xFF);
+        }
 
         const int numFrames = ctx.numFrames;
         float* outL = ctx.outputs[0];
@@ -632,6 +669,12 @@ private:
     std::atomic<bool> allOff_{false};
     std::atomic<bool> settle_{false};
     std::atomic<bool> hitDark_{false};
+    static constexpr int kTapQueue = 64;
+    static int tapSlot(int index) { return index == kKey ? 0 : index == kPad ? 1 : index == kConsonant ? 2 : 3; }
+    std::atomic<int32_t> tapQueue_[kTapQueue] = {};
+    std::atomic<uint32_t> tapWrite_{0};
+    uint32_t tapRead_ = 0;   // the audio thread's
+    std::atomic<int> tapLast_[4] = {};
     std::atomic<int> faceFrame_{0}, velumFrame_{0}, hitPad_{0}, hitCount_{0};
     const void* texts_ = nullptr;
     std::atomic<char> previewBuf_[64] = {};

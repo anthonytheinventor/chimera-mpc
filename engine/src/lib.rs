@@ -849,6 +849,25 @@ impl ChimeraMpc {
         self.type_keys();
     }
 
+    /// A tap on a momentary control (Key, Pad, Consonant, Speak), caught by the plugin the moment
+    /// the MPC set it: a quick tap can come and go between two blocks, so the parameter alone
+    /// misses it. `value` is the step the control was set to.
+    fn tap(&mut self, index: usize, value: usize) {
+        self.apply_params();
+        match index {
+            // the keyboard types only while the sequence is stopped (see apply_params)
+            p::KEY if value >= 1 && !self.transport.playing && self.n_pending < self.pending_keys.len() => {
+                self.pending_keys[self.n_pending] = value as u8;
+                self.n_pending += 1;
+                self.type_keys();
+            }
+            p::PAD if self.mode == MODE_BEATBOX && (1..=STEP_IDS.len()).contains(&value) => self.beat_hit(STEP_IDS[value - 1], 1.0),
+            p::CONSONANT if self.mode == MODE_SPEAK && value >= 1 => self.say_pad(value - 1),
+            p::SPEAK if self.mode == MODE_SPEAK && value >= 1 => self.say_next(1.0),
+            _ => {}
+        }
+    }
+
     /// Type the keys waiting, and work out the preview again, if the bank is free.
     fn type_keys(&mut self) {
         if self.n_pending == 0 && !self.preview_dirty {
@@ -1397,6 +1416,17 @@ pub extern "C" fn cm_settle(h: *mut ChimeraMpc) {
             e.applied[i] = e.params[i];
         }
     });
+}
+
+/// A tap on a momentary control (parameter `index`: Key, Pad, Consonant or Speak), set to step
+/// `value`. The plugin catches taps as the host sets them and passes them here from the audio
+/// thread; it then sends those parameters as 0 in cm_set_params, so a tap acts once.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_tap(h: *mut ChimeraMpc, index: i32, value: i32) {
+    if index < 0 || value < 0 {
+        return;
+    }
+    guarded(h, |e| e.tap(index as usize, value as usize));
 }
 
 /// A raw MIDI message: status (with its channel) and two data bytes. Notes, pitch bend, channel
