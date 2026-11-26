@@ -43,7 +43,7 @@ use worker::{Hub, Lyrics, Request, Speech, TRASH_ROOM, Trash};
 /// The plugin's parameters, in the plugin's order (`src/CHIMERAMPC.cpp` declares the same list).
 /// Values arrive in plain units.
 pub mod p {
-    pub const GAIN: usize = 0; // dB, applied by the C++ side
+    pub const GAIN: usize = 0; // dB, on the voice's output level, before its limiter
     pub const BREATH: usize = 1; // cmH2O
     pub const PRESSED: usize = 2; // 0..1
     pub const BRIGHT: usize = 3; // 0..1
@@ -325,6 +325,9 @@ pub struct ChimeraMpc {
     hit_serial: i32,
     /// the voice clock up to which the sequencer's hits have been looked at
     hit_clock: f64,
+    /// the playing voice's own output level (its body's), and the Gain on it now (linear, smoothed)
+    base_gain: f64,
+    gain_now: f64,
     /// the request last sent to the worker
     sent: Option<Request>,
     params: [f32; p::COUNT],
@@ -378,6 +381,7 @@ impl ChimeraMpc {
         // the engine's own first voice (CHIMERA's default settings) is not used: freed here
         engine.install_voice(&mut male, BODIES[0]);
         drop(male);
+        let base_gain = engine.voice().output_gain;
         let hub = Hub::new();
         worker::start(hub.clone(), fs, content, texts.clone());
         let mut e = ChimeraMpc {
@@ -397,6 +401,8 @@ impl ChimeraMpc {
             hit_pad: 0,
             hit_serial: 0,
             hit_clock: 0.0,
+            base_gain,
+            gain_now: 1.0,
             sent: None,
             params: defaults(),
             applied: [f32::NAN; p::COUNT],
@@ -454,7 +460,13 @@ impl ChimeraMpc {
             Playing::Preset(b) => BODIES[b],
             Playing::Blend((f, c)) => BodyMix::new(f as f64, c as f64),
         };
+        // the outgoing voice gets its own level back (Gain is on the playing one only)
+        self.engine.voice_mut().output_gain = self.base_gain;
         self.engine.install_voice(&mut voice, mix);
+        self.base_gain = self.engine.voice().output_gain;
+        self.engine.voice_mut().output_gain = self.base_gain * self.gain_now;
+        // the new voice's clock starts at zero: the beat's hits are looked at from there
+        self.hit_clock = self.engine.clock();
         match self.playing {
             Playing::Preset(b) => self.voices[b] = Some(voice),
             Playing::Blend(_) => self.trash(Trash::Voice(voice)),
@@ -463,9 +475,13 @@ impl ChimeraMpc {
         self.singer.body = mix;
         // the new voice took over the source and posture; the parameters set the rest again
         // (the lyrics stay: the singer keeps its syllables)
-        let lyrics = self.applied[p::LYRICS];
+        // (the lyrics stay: the singer keeps its syllables; the momentary controls keep what they
+        // had, or a held pad, consonant or key would act again)
+        let kept = self.applied;
         self.applied = [f32::NAN; p::COUNT];
-        self.applied[p::LYRICS] = lyrics;
+        for i in [p::LYRICS, p::SPEAK, p::CONSONANT, p::PAD, p::KEY] {
+            self.applied[i] = kept[i];
+        }
     }
 
     fn trash(&mut self, t: Trash) {
@@ -616,6 +632,21 @@ impl ChimeraMpc {
         self.engine.beat_hit_at(&step, hit, BEAT_HIT_LEN, None);
     }
 
+    /// Gain moves the voice's own output level, before its limiter (after it, a boost clipped);
+    /// smoothed over about 20 ms.
+    fn follow_gain(&mut self, n: usize) {
+        let target = pow(10.0, self.params[p::GAIN].clamp(-60.0, 24.0) as f64 / 20.0);
+        if (target - self.gain_now).abs() < 1e-6 {
+            return;
+        }
+        let k = 1.0 - exp(-(n as f64) / (0.02 * self.fs));
+        self.gain_now += (target - self.gain_now) * k;
+        if (target - self.gain_now).abs() < 1e-4 * target {
+            self.gain_now = target;
+        }
+        self.engine.voice_mut().output_gain = self.base_gain * self.gain_now;
+    }
+
     /// The screen lights this sound's pad.
     fn show_hit(&mut self, id: &str) {
         if let Some(k) = STEP_IDS.iter().position(|s| *s == id) {
@@ -629,7 +660,7 @@ impl ChimeraMpc {
         let now = self.engine.clock();
         let beat = self.engine.beat();
         let (mut latest, mut id) = (self.hit_clock, None);
-        if beat.playing {
+        if beat.playing || beat.following() {
             let steps = beat.steps();
             for (n, t) in beat.recent_hits() {
                 if t > self.hit_clock && t <= now && t >= latest && !steps.is_empty() {
@@ -804,7 +835,10 @@ impl ChimeraMpc {
         if changed(p::BREATHE) || changed(p::MODE) {
             self.update_gate();
         }
-        if changed(p::KEY) && q[p::KEY] >= 0.5 && self.n_pending < self.pending_keys.len() {
+        // the keyboard types only while the MPC's sequence is stopped: Key is automatable (the MPC
+        // takes screen taps only on such parameters), so taps recorded as automation would type
+        // again at every pass of the sequence
+        if changed(p::KEY) && q[p::KEY] >= 0.5 && !self.transport.playing && self.n_pending < self.pending_keys.len() {
             self.pending_keys[self.n_pending] = q[p::KEY].round() as u8;
             self.n_pending += 1;
         }
@@ -1053,6 +1087,7 @@ impl ChimeraMpc {
             self.update_bend();
         }
         self.glide_expression(out.len());
+        self.follow_gain(out.len());
         self.engine.render(out);
         self.show_beat_hits();
         if self.mode == MODE_BEATBOX && self.params[p::MIC] >= 0.5 {

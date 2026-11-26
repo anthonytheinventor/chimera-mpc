@@ -1,7 +1,7 @@
 //! Render the built-in voice presets (src/CHIMERAMPC.cpp, addProgram) to compare them: each sings
 //! the lyrics tune in Sing and holds an "ah" in Play, and prints the loudness and peak so the
-//! presets can be level-matched. Gain is applied after the engine, as the plugin does (after its
-//! limiter, whose ceiling is 0.75: a preset's gain must keep the peaks under 1). WAVs go to build/listen/presets/.
+//! presets can be level-matched. The engine applies Gain to the voice's level, before its limiter
+//! (ceiling 0.75), so a boost turns the voice up into it and never clips. WAVs go to build/listen/presets/.
 //!
 //!   cargo run --release --example presets
 //!
@@ -17,10 +17,10 @@ const PRESETS: &[(&str, [f32; 14])] = &[
     ("Init", [0.0, 7.2, 50.0, 25.0, 60.0, 15.0, 10.0, 0.0, 0.0, 35.0, 6.0, 0.0, 50.0, 0.0]),
     ("Natural", [-1.0, 8.0, 45.0, 30.0, 40.0, 12.0, 5.0, 0.0, 0.0, 15.0, 5.5, 0.0, 50.0, 0.0]),
     ("Breathy", [2.0, 6.0, 20.0, 15.0, 80.0, 60.0, 0.0, 0.0, 0.0, 25.0, 5.5, 1.0, 50.0, 0.0]),
-    ("Belt", [0.0, 14.0, 80.0, 65.0, 50.0, 3.0, 15.0, 0.0, 30.0, 25.0, 5.8, 0.0, 50.0, 0.0]),
-    ("Opera", [-2.0, 12.0, 60.0, 45.0, 90.0, 5.0, 0.0, 0.0, 80.0, 70.0, 5.8, 0.0, 50.0, 0.0]),
+    ("Belt", [-3.0, 14.0, 80.0, 65.0, 50.0, 3.0, 15.0, 0.0, 30.0, 25.0, 5.8, 0.0, 50.0, 0.0]),
+    ("Opera", [-6.0, 12.0, 60.0, 45.0, 90.0, 5.0, 0.0, 0.0, 80.0, 70.0, 5.8, 0.0, 50.0, 0.0]),
     ("Airy", [3.0, 5.0, 15.0, 10.0, 120.0, 75.0, 0.0, 0.0, 0.0, 20.0, 5.0, 1.0, 50.0, 0.0]),
-    ("Rough", [0.0, 11.0, 70.0, 40.0, 40.0, 10.0, 70.0, 20.0, 0.0, 10.0, 5.5, 0.0, 50.0, 0.0]),
+    ("Rough", [-4.0, 11.0, 70.0, 40.0, 40.0, 10.0, 70.0, 20.0, 0.0, 10.0, 5.5, 0.0, 50.0, 0.0]),
     ("Child", [2.0, 7.0, 45.0, 40.0, 50.0, 20.0, 0.0, 0.0, 0.0, 20.0, 6.0, 2.0, 50.0, 0.0]),
 ];
 
@@ -159,15 +159,12 @@ fn main() {
             s.render(0.06);
         }
         s.render(0.5);
-        let g = 10f32.powf(v[0] / 20.0);
-        s.out.iter_mut().for_each(|x| *x *= g);
         let mut pl = Rig::new(v, 1.0);
         pl.settle();
         cm_note_on(pl.h, 52 + up, 100);
         pl.render(1.6);
         cm_note_off(pl.h, 52 + up);
         pl.render(0.4);
-        pl.out.iter_mut().for_each(|x| *x *= g);
         println!("{:<10} {:>9.1} {:>7.2} {:>9.1} {:>7.2} {:>9.0}", name, active_rms_db(&s.out), peak(&s.out), active_rms_db(&pl.out), peak(&pl.out), centroid(&pl.out[..(1.6 * FS) as usize]));
         write_wav(&format!("{dir}/{}_{}_sing.wav", k + 1, name.to_lowercase()), &s.out);
         write_wav(&format!("{dir}/{}_{}_play.wav", k + 1, name.to_lowercase()), &pl.out);

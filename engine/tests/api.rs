@@ -480,3 +480,80 @@ fn drum_hits_are_reported_for_the_screen() {
     }
     assert!(seen.len() >= 3, "the beat lit only {seen:?}");
 }
+
+/// Render `blocks` blocks of 128 with the host's transport playing at 120 bpm from `beats`;
+/// returns the pads the screen was told about and the beat position reached.
+fn follow_host(r: &mut Rig, beats: f64, blocks: usize) -> (std::collections::HashSet<i32>, f64) {
+    let mut seen = std::collections::HashSet::new();
+    let mut b = beats;
+    let mut buf = [0.0f32; 128];
+    let mut shown = [0i32; 4];
+    for _ in 0..blocks {
+        cm_transport(r.h, 1, 1, 120.0, 1, b, 128);
+        cm_set_params(r.h, r.params.as_ptr(), p::COUNT as i32);
+        cm_render(r.h, buf.as_mut_ptr(), 128);
+        b += 128.0 / FS * 2.0;
+        cm_display(r.h, shown.as_mut_ptr());
+        seen.insert(shown[2]);
+    }
+    (seen, b)
+}
+
+#[test]
+fn the_beat_lights_its_pads_while_following_the_host_and_after_a_body_change() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 3.0);
+    r.set(p::FOLLOW, 1.0);
+    r.render(0.2);
+    let (seen, beats) = follow_host(&mut r, 0.0, 700);
+    assert!(seen.len() >= 3, "following the host, the beat lit only {seen:?}");
+    // a body change starts the new voice's clock at zero: the lights go on
+    r.set(p::BODY, 1.0);
+    let (seen, _) = follow_host(&mut r, beats, 700);
+    assert!(seen.len() >= 3, "after a body change, the beat lit only {seen:?}");
+}
+
+#[test]
+fn gain_turns_the_voice_up_into_its_limiter_without_clipping() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 1.0);
+    r.set(p::GAIN, 12.0);
+    r.set(p::BREATHE, 1.0);
+    r.render(1.5);
+    let peak = r.out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!(peak <= 1.0, "Gain +12 dB clipped: peak {peak}");
+    let loud = rms(&r.out[r.out.len() / 2..]);
+    let mut q = Rig::new();
+    q.set(p::MODE, 1.0);
+    q.set(p::GAIN, -12.0);
+    q.set(p::BREATHE, 1.0);
+    q.render(1.5);
+    let soft = rms(&q.out[q.out.len() / 2..]);
+    assert!(loud > soft * 2.0, "Gain does not change the level: {loud} vs {soft}");
+}
+
+#[test]
+fn the_keyboard_does_not_type_while_the_sequence_plays() {
+    let mut r = Rig::new();
+    r.render(0.3);
+    let mut buf = [0u8; 64];
+    let before = cm_text_preview(r.h, buf.as_mut_ptr(), 64);
+    let mut out = [0.0f32; 128];
+    // a recorded tap played back by the sequence: ignored
+    for k in [1.0f32, 0.0] {
+        r.set(p::KEY, k);
+        cm_transport(r.h, 1, 1, 120.0, 1, 0.0, 128);
+        cm_set_params(r.h, r.params.as_ptr(), p::COUNT as i32);
+        cm_render(r.h, out.as_mut_ptr(), 128);
+    }
+    let during = cm_text_preview(r.h, buf.as_mut_ptr(), 64);
+    assert_eq!(before, during, "a key typed while the sequence played");
+    // stopped: the same tap types
+    for k in [1.0f32, 0.0] {
+        r.set(p::KEY, k);
+        cm_transport(r.h, 0, 1, 120.0, 1, 0.0, 128);
+        cm_set_params(r.h, r.params.as_ptr(), p::COUNT as i32);
+        cm_render(r.h, out.as_mut_ptr(), 128);
+    }
+    assert_ne!(cm_text_preview(r.h, buf.as_mut_ptr(), 64), during, "a tap did not type while stopped");
+}

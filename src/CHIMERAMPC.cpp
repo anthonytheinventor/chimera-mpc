@@ -5,7 +5,8 @@
 // nose), not from samples. Its Rust engine is built into this plugin as a static library
 // (engine/, C interface in chimera_mpc.h) with the settings that fit a 32-bit MPC.
 //
-// Signal flow: MIDI notes -> the engine -> mono voice -> Gain (smoothed) -> both outputs.
+// Signal flow: MIDI notes -> the engine (Gain on the voice's level, before its limiter) -> mono
+// voice -> both outputs.
 //
 // Modes:
 //   Sing  each note sings the next syllable of the chosen lyrics (Content/lyrics.txt, one line a
@@ -232,7 +233,7 @@ public:
         // Built-in programs: voices only. Each sets parameters 0-13 (Gain, the voice source, the
         // body) and leaves the mode, words, mouth posture and beat alone (a program's missing
         // values are left as they are). Gains level-match the presets; Gain comes after the
-        // engine's limiter (ceiling 0.75), so a boost stays small enough to keep peaks under 1.
+        // engine's limiter (ceiling 0.75): a boost turns the voice up into it, it never clips.
         // engine/examples/presets.rs renders and measures them (keep its list the same).
         //          Gain  Breath Press Bright Glide Brthy Rough Fry  Ring  Vib  Rate Body Fem  Child
         addProgram("Init", {0.0f, d[kBreath], d[kPressed] * 100.0f, d[kBright] * 100.0f, d[kGlide] * 1000.0f,
@@ -240,10 +241,10 @@ public:
                             0.0f, 50.0f, 0.0f});
         addProgram("Natural", {-1.0f, 8.0f, 45.0f, 30.0f, 40.0f, 12.0f, 5.0f, 0.0f, 0.0f, 15.0f, 5.5f, 0.0f, 50.0f, 0.0f});
         addProgram("Breathy", { 2.0f, 6.0f, 20.0f, 15.0f, 80.0f, 60.0f, 0.0f, 0.0f, 0.0f, 25.0f, 5.5f, 1.0f, 50.0f, 0.0f});
-        addProgram("Belt",    { 0.0f, 14.0f, 80.0f, 65.0f, 50.0f, 3.0f, 15.0f, 0.0f, 30.0f, 25.0f, 5.8f, 0.0f, 50.0f, 0.0f});
-        addProgram("Opera",   {-2.0f, 12.0f, 60.0f, 45.0f, 90.0f, 5.0f, 0.0f, 0.0f, 80.0f, 70.0f, 5.8f, 0.0f, 50.0f, 0.0f});
+        addProgram("Belt",    {-3.0f, 14.0f, 80.0f, 65.0f, 50.0f, 3.0f, 15.0f, 0.0f, 30.0f, 25.0f, 5.8f, 0.0f, 50.0f, 0.0f});
+        addProgram("Opera",   {-6.0f, 12.0f, 60.0f, 45.0f, 90.0f, 5.0f, 0.0f, 0.0f, 80.0f, 70.0f, 5.8f, 0.0f, 50.0f, 0.0f});
         addProgram("Airy",    { 3.0f, 5.0f, 15.0f, 10.0f, 120.0f, 75.0f, 0.0f, 0.0f, 0.0f, 20.0f, 5.0f, 1.0f, 50.0f, 0.0f});
-        addProgram("Rough",   { 0.0f, 11.0f, 70.0f, 40.0f, 40.0f, 10.0f, 70.0f, 20.0f, 0.0f, 10.0f, 5.5f, 0.0f, 50.0f, 0.0f});
+        addProgram("Rough",   {-4.0f, 11.0f, 70.0f, 40.0f, 40.0f, 10.0f, 70.0f, 20.0f, 0.0f, 10.0f, 5.5f, 0.0f, 50.0f, 0.0f});
         addProgram("Child",   { 2.0f, 7.0f, 45.0f, 40.0f, 50.0f, 20.0f, 0.0f, 0.0f, 0.0f, 20.0f, 6.0f, 2.0f, 50.0f, 0.0f});
 
         // The helper thread puts the face on the screen (see notifierMain). Without it the plugin
@@ -311,10 +312,10 @@ public:
         allOff_.store(true, std::memory_order_release);
         // a loaded state or program must not act as a tap on the momentary controls (process)
         settle_.store(true, std::memory_order_release);
-        smoothedGain_ = dbToGain(get(kGain));
         padSeen_ = false;
         beatSeen_ = false;
         slotsSeen_ = false;
+        hitDark_.store(true, std::memory_order_release);   // the helper thread darkens the pads
     }
 
     void process(mpc::ProcessContext& ctx) override
@@ -342,7 +343,6 @@ public:
         v[kGlide] *= 0.001f;
         cm_set_params(e, v, kEngineParams);
         if (settle_.exchange(false, std::memory_order_acq_rel)) cm_settle(e);
-        const float targetGain = dbToGain(get(kGain));
 
         const int numFrames = ctx.numFrames;
         float* outL = ctx.outputs[0];
@@ -361,10 +361,8 @@ public:
                 cm_render(e, buf_, n);
                 for (int i = 0; i < n; ++i)
                 {
-                    smoothedGain_ += 0.002f * (targetGain - smoothedGain_);
-                    const float y = buf_[i] * smoothedGain_;
-                    outL[frame + i] = y;
-                    if (outR) outR[frame + i] = y;
+                    outL[frame + i] = buf_[i];
+                    if (outR) outR[frame + i] = buf_[i];
                 }
                 frame += n;
             }
@@ -444,7 +442,13 @@ private:
             const uint32_t n = processed_.load(std::memory_order_relaxed);
             idleLooks = (n == lastProcessed) ? idleLooks + 1 : 0;
             lastProcessed = n;
-            if (idleLooks > 3) continue;   // no audio for 200 ms: say nothing to the host
+            if (idleLooks > 3)
+            {
+                // no audio for 200 ms: say nothing to the host; a lit pad goes dark (written only,
+                // shown when the screen next reads it)
+                if (shownHit > 0) { shownHit = 0; set(kHit, 0.0f); }
+                continue;
+            }
 
             bool moved = false;
             for (int i = 0; i < kNumParams; ++i)
@@ -482,7 +486,15 @@ private:
             // a drum hit lights its pad for a moment (reported even while knobs move: hits are taps)
             const int hits = hitCount_.load(std::memory_order_acquire);
             int lit = shownHit < 0 ? 0 : shownHit;
-            if (hits != lastHitCount)
+            if (hitDark_.exchange(false, std::memory_order_acq_rel))
+            {
+                // after a load or reset: dark, whatever the project saved
+                lastHitCount = hits;
+                hitLooks = 0;
+                lit = 0;
+                shownHit = -1;
+            }
+            else if (hits != lastHitCount)
             {
                 lastHitCount = hits;
                 lit = hitPad_.load(std::memory_order_relaxed);
@@ -515,8 +527,6 @@ private:
 
     static constexpr char kUid[5] = "Am6u";
 
-    static float dbToGain(float dB) { return std::pow(10.0f, dB / 20.0f); }
-
     // The vowel pad moved: its posture goes into the articulator parameters (the parameters stay
     // the one record of the posture, so a saved project sounds the same). Written as values
     // only: the screen shows them when it next reads them.
@@ -528,10 +538,25 @@ private:
             // first block after a load: the articulators already hold the posture
             padSeen_ = true;
             padFront_ = front; padOpen_ = open;
+            rememberArtic();
             return;
         }
-        if (front == padFront_ && open == padOpen_) return;
+        bool articMoved = false;
+        for (int k = 0; k < 9; ++k)
+            if (get(kPadParams[k]) != padArtic_[k]) articMoved = true;
+        if (front == padFront_ && open == padOpen_)
+        {
+            if (articMoved) rememberArtic();
+            return;
+        }
         padFront_ = front; padOpen_ = open;
+        if (articMoved)
+        {
+            // the articulators changed in the same block: a project or program loading
+            // (parameter by parameter, while audio runs), not a drag on the pad
+            rememberArtic();
+            return;
+        }
         float a[9];
         cm_vowel_posture(e, front * 0.01f, open * 0.01f, a);
         a[5] = 1.0f - a[5];   // lip width -> Rounding
@@ -541,6 +566,12 @@ private:
             if (kPadParams[k] == kRounding || kPadParams[k] == kTipCurl) x *= 100.0f;   // percent parameters
             set(kPadParams[k], x);
         }
+        rememberArtic();
+    }
+
+    void rememberArtic()
+    {
+        for (int k = 0; k < 9; ++k) padArtic_[k] = get(kPadParams[k]);
     }
 
     // A beat preset was picked: its steps, tempo and swing go into their parameters (as the vowel
@@ -588,6 +619,7 @@ private:
     std::atomic<bool> inProcess_{false};
     std::atomic<bool> allOff_{false};
     std::atomic<bool> settle_{false};
+    std::atomic<bool> hitDark_{false};
     std::atomic<int> faceFrame_{0}, velumFrame_{0}, hitPad_{0}, hitCount_{0};
     const void* texts_ = nullptr;
     std::atomic<char> previewBuf_[64] = {};
@@ -599,13 +631,13 @@ private:
     std::mutex quitMutex_;
     std::condition_variable quitCv_;
     double engineRate_ = 0.0;
-    float smoothedGain_ = 1.0f;
     bool padSeen_ = false;
     bool beatSeen_ = false;
     bool slotsSeen_ = false;
     int lastInto_ = 0, lastTypeSlot_ = 0, lastPlaying_ = 0;
     int lastBeat_ = 0;
     float padFront_ = 0.0f, padOpen_ = 0.0f;
+    float padArtic_[9] = {};
     float buf_[kChunk] = {};
 };
 
