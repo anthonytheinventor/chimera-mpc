@@ -33,6 +33,8 @@ int cm_beat_preset(int index, float* steps16, float* bpm, float* swing);
 // The host's transport for the block about to render (frames in `samples`).
 void cm_transport(ChimeraMpc* engine, int playing, int bpm_valid, double bpm, int beats_valid, double beats, int samples);
 
+// A raw MIDI message: status (with its channel) and two data bytes.
+void cm_midi(ChimeraMpc* engine, int status, int d1, int d2);
 void cm_note_on(ChimeraMpc* engine, int note, int velocity);
 void cm_note_off(ChimeraMpc* engine, int note);
 void cm_all_notes_off(ChimeraMpc* engine);

@@ -237,12 +237,12 @@
           "widget": "knob"
         },
         {
-          "param": "Fry",
+          "param": "Consonant",
           "widget": "knob"
         },
         {
-          "param": "Ring",
-          "widget": "knob"
+          "param": "Pad Vowel",
+          "widget": "switch"
         }
       ]
     },
@@ -394,6 +394,14 @@
         {
           "param": "Gain",
           "widget": "fader"
+        },
+        {
+          "param": "MPE",
+          "widget": "switch"
+        },
+        {
+          "param": "Restart",
+          "widget": "switch"
         }
       ]
     }

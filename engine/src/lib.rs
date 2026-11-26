@@ -76,7 +76,7 @@ pub mod p {
     pub const MODE: usize = 32; // 0 Sing, 1 Play, 2 Speak, 3 Beatbox
     pub const BREATHE: usize = 33; // 0/1: Play's held breath without a key
     pub const RESTART: usize = 34; // 0/1: lyrics and lines from their start when the transport starts
-    pub const MPE: usize = 35; // 0/1 (not used yet)
+    pub const MPE: usize = 35; // 0/1: MIDI channels 2-16 are MPE note channels
     pub const LYRICS: usize = 36; // slot 0..7
     pub const START_SYL: usize = 37; // syllable the lyrics start from
     pub const SPEECH: usize = 38; // slot 0..7
@@ -84,8 +84,8 @@ pub mod p {
     pub const SPEECH_RATE: usize = 40; // x
     pub const IPA: usize = 41; // 0/1: the speech text is IPA
     pub const SPEAK: usize = 42; // momentary: say the next line
-    pub const CONSONANT: usize = 43; // (not used yet: the consonant chart)
-    pub const PAD_VOWEL: usize = 44; // (not used yet)
+    pub const CONSONANT: usize = 43; // momentary: 0 none, 1.. worker::CONSONANTS (said in Speak)
+    pub const PAD_VOWEL: usize = 44; // the vowel around it: worker::PAD_VOWELS
     pub const BEAT: usize = 45; // 0..6 a preset, 7 your beat (the C++ side writes a preset's steps)
     pub const TEMPO: usize = 46; // bpm
     pub const SWING: usize = 47; // 0..0.6
@@ -106,8 +106,16 @@ const MODE_BEATBOX: i32 = 3;
 pub const STEP_IDS: [&str; 10] = ["B", "t", "Pf", "K", "^K", "!", "P!", "tss", "kch", "m"];
 const STEPS: usize = 16;
 
-/// Pitch bend range each way (semitones), as CHIMERA's plugin.
+/// Pitch bend range each way (semitones), as CHIMERA's plugin; an MPE note channel's.
 const BEND_RANGE: f64 = 2.0;
+const MPE_BEND_RANGE: f64 = 48.0;
+/// Full pressure raises the breath by this fraction of the Breath parameter; the breath's most;
+/// how far a full slide moves the brightness from where the note started; the glide of pressure
+/// and brightness to a new value (s). As CHIMERA's plugin.
+const PRESSURE_DEPTH: f64 = 0.75;
+const BREATH_MAX: f64 = 22.0;
+const SLIDE_DEPTH: f64 = 1.0;
+const EXPR_GLIDE: f64 = 0.012;
 /// Most keys held at once that legato falls back through.
 const MAX_KEYS: usize = 16;
 /// Lyrics and speech slots.
@@ -278,8 +286,25 @@ pub struct ChimeraMpc {
     /// Beatbox: the keys humming (newest last)
     hums: [u8; MAX_KEYS],
     n_hums: usize,
-    wheel: f64,
     key_bend: f64,
+    /// MIDI expression: each channel's bend (0..1, 0.5 at rest), pressure and slide (CC 74), the
+    /// slide where the sounding note started, each key's pressure, each key's channel
+    bend: [f32; 16],
+    last_bend: f32,
+    pressure: [f32; 16],
+    slide: [f32; 16],
+    slide_origin: [f32; 16],
+    key_pressure: [f32; 128],
+    note_channel: [u8; 128],
+    /// the note whose channel the expression follows, and that channel
+    expr_note: Option<u8>,
+    expr_channel: u8,
+    /// Speak and Beatbox: the last key down
+    last_on: Option<u8>,
+    /// the breath and brightness sent to the voice, gliding to where the expression puts them
+    expr_now: (f64, f64),
+    /// the MPE switch as the bend last saw it
+    mpe_seen: f32,
     transport: Transport,
     following: bool,
     close_mic: CloseMic,
@@ -317,8 +342,19 @@ impl ChimeraMpc {
             n_keys: 0,
             hums: [0; MAX_KEYS],
             n_hums: 0,
-            wheel: 1.0,
             key_bend: 1.0,
+            bend: [0.5; 16],
+            last_bend: 0.5,
+            pressure: [0.0; 16],
+            slide: [0.5; 16],
+            slide_origin: [0.5; 16],
+            key_pressure: [0.0; 128],
+            note_channel: [0; 128],
+            expr_note: None,
+            expr_channel: 0,
+            last_on: None,
+            expr_now: (f64::NAN, f64::NAN),
+            mpe_seen: f32::NAN,
             transport: Transport::default(),
             following: false,
             close_mic: CloseMic::new(fs),
@@ -449,13 +485,13 @@ impl ChimeraMpc {
     }
 
     fn lines_len(&self) -> usize {
-        self.speech.as_ref().map_or(0, |s| s[self.speech_slot()][self.preset()].len())
+        self.speech.as_ref().map_or(0, |s| s.lines[self.speech_slot()][self.preset()].len())
     }
 
     /// Say the next line at this pitch ratio (the whole contour moves through the bend).
     fn say_next(&mut self, key_bend: f64) {
         let (slot, b) = (self.speech_slot(), self.preset());
-        let n = self.speech.as_ref().map_or(0, |s| s[slot][b].len());
+        let n = self.speech.as_ref().map_or(0, |s| s.lines[slot][b].len());
         if n == 0 {
             return;
         }
@@ -463,10 +499,21 @@ impl ChimeraMpc {
         self.key_bend = key_bend;
         self.update_bend();
         if let Some(s) = self.speech.as_ref() {
-            let g: &[Gesture] = &s[slot][b][i];
+            let g: &[Gesture] = &s.lines[slot][b][i];
             self.engine.schedule(g, SPEECH_LEAD, true);
         }
         self.speech_cursor = (i + 1) % n;
+    }
+
+    /// Say consonant `c` (an index into worker::CONSONANTS) between two of the Pad Vowel.
+    fn say_pad(&mut self, c: usize) {
+        let v = (self.params[p::PAD_VOWEL].round().max(0.0) as usize).min(worker::PAD_VOWELS.len() - 1);
+        let b = self.preset();
+        self.key_bend = 1.0;
+        self.update_bend();
+        if let Some(g) = self.speech.as_ref().and_then(|s| s.pads.get(c)).map(|p| &p[v][b]) {
+            self.engine.schedule(g, SPEECH_LEAD, true);
+        }
     }
 
     // --- beatbox
@@ -554,10 +601,9 @@ impl ChimeraMpc {
             // while singing, the notes' own gestures carry the vibrato (as CHIMERA's plugin)
             let depth = if self.mode == MODE_PLAY { q[p::VIBRATO] as f64 } else { 0.0 };
             self.singer.vibrato = q[p::VIBRATO] as f64;
+            // the breath and brightness come from the expression (render)
             self.engine.set_source(&SourcePatch {
-                pressure: Some(q[p::BREATH] as f64),
                 tension: Some(q[p::PRESSED] as f64),
-                brightness: Some(q[p::BRIGHT] as f64),
                 glide: Some(q[p::GLIDE] as f64),
                 breathiness: Some(q[p::BREATHY] as f64),
                 roughness: Some(q[p::ROUGH] as f64),
@@ -609,6 +655,9 @@ impl ChimeraMpc {
         if changed(p::SPEAK) && q[p::SPEAK] >= 0.5 && was[p::SPEAK] < 0.5 && self.mode == MODE_SPEAK {
             self.say_next(1.0);
         }
+        if changed(p::CONSONANT) && q[p::CONSONANT] >= 0.5 && self.mode == MODE_SPEAK {
+            self.say_pad(q[p::CONSONANT].round() as usize - 1);
+        }
         // the sequencer
         if (p::STEP_1..p::STEP_1 + STEPS).any(changed) {
             let mut steps = [None; STEPS];
@@ -643,8 +692,92 @@ impl ChimeraMpc {
         self.engine.set_gate(if on { 1.0 } else { 0.0 });
     }
 
+    /// The engine's bend: the key's transposition (Speak), the wheel, the sounding note's own
+    /// bend (MPE).
     fn update_bend(&mut self) {
-        self.engine.set_bend(self.key_bend * self.wheel);
+        let mpe = self.params[p::MPE] >= 0.5;
+        let wheel = if mpe { self.bend[0] } else { self.last_bend } as f64;
+        let ch = self.expr_channel as usize;
+        let note = if mpe && ch != 0 { pow(2.0, (self.bend[ch] as f64 - 0.5) * 2.0 * MPE_BEND_RANGE / 12.0) } else { 1.0 };
+        self.engine.set_bend(self.key_bend * pow(2.0, (wheel - 0.5) * 2.0 * BEND_RANGE / 12.0) * note);
+    }
+
+    /// The breath and brightness the expression asks for: the sounding note's pressure on the
+    /// Breath dial, its slide (MPE) on the Bright dial.
+    fn expression(&self) -> (f64, f64) {
+        let ch = self.expr_channel as usize;
+        let press = self.pressure[ch].max(self.expr_note.map_or(0.0, |n| self.key_pressure[n as usize])) as f64;
+        let breath = (self.params[p::BREATH] as f64 * (1.0 + PRESSURE_DEPTH * press)).min(BREATH_MAX);
+        let slide = if self.params[p::MPE] >= 0.5 { (self.slide[ch] - self.slide_origin[ch]) as f64 * SLIDE_DEPTH } else { 0.0 };
+        (breath, (self.params[p::BRIGHT] as f64 + slide).clamp(0.0, 1.0))
+    }
+
+    /// Glide the breath and brightness toward the expression over this many samples.
+    fn glide_expression(&mut self, samples: usize) {
+        let (b, r) = self.expression();
+        let (nb, nr) = if self.expr_now.0.is_nan() {
+            (b, r)
+        } else {
+            let (ob, or) = self.expr_now;
+            if (b - ob).abs() < 0.005 && (r - or).abs() < 0.0005 {
+                return;
+            }
+            let k = 1.0 - exp(-(samples as f64) / (self.fs * EXPR_GLIDE));
+            (ob + (b - ob) * k, or + (r - or) * k)
+        };
+        self.expr_now = (nb, nr);
+        self.engine.set_source(&SourcePatch { pressure: Some(nb), brightness: Some(nr), ..Default::default() });
+    }
+
+    /// The note sounding now, whose channel the expression follows.
+    fn sounding(&self) -> Option<u8> {
+        match self.mode {
+            MODE_SING => self.singer.sounding_note(),
+            MODE_PLAY => (self.n_keys > 0).then(|| self.keys[self.n_keys - 1]),
+            _ => self.last_on,
+        }
+    }
+
+    fn follow_expression(&mut self) {
+        let Some(note) = self.sounding() else { return };
+        self.expr_note = Some(note);
+        self.expr_channel = self.note_channel[note as usize];
+        self.update_bend();
+    }
+
+    /// A raw MIDI message (status with its channel, two data bytes).
+    fn midi(&mut self, status: u8, d1: u8, d2: u8) {
+        let ch = (status & 0x0F) as usize;
+        let key = (d1 & 127) as usize;
+        match status & 0xF0 {
+            0x90 if d2 > 0 => {
+                // a controller need not send a closing zero; the slide starts from here
+                self.note_channel[key] = ch as u8;
+                self.slide_origin[ch] = self.slide[ch];
+                self.key_pressure[key] = 0.0;
+                self.last_on = Some(key as u8);
+                self.note_on(key as u8, d2.min(127));
+                self.follow_expression();
+            }
+            0x80 | 0x90 => {
+                self.note_off(key as u8);
+                self.follow_expression();
+            }
+            0xE0 => {
+                let v = ((d1 as u32 | ((d2 as u32) << 7)) as f32 / 16383.0).clamp(0.0, 1.0);
+                self.bend[ch] = v;
+                self.last_bend = v;
+                self.update_bend();
+            }
+            0xD0 => self.pressure[ch] = d1 as f32 / 127.0,
+            0xA0 => self.key_pressure[key] = d2 as f32 / 127.0,
+            0xB0 => match d1 {
+                74 => self.slide[ch] = d2 as f32 / 127.0,
+                120 | 123 => self.stop_notes(),
+                _ => {}
+            },
+            _ => {}
+        }
     }
 
     // --- notes
@@ -763,6 +896,11 @@ impl ChimeraMpc {
     fn render(&mut self, out: &mut [f32]) {
         self.talk_to_worker();
         self.apply_params();
+        if self.params[p::MPE].to_bits() != self.mpe_seen.to_bits() {
+            self.mpe_seen = self.params[p::MPE];
+            self.update_bend();
+        }
+        self.glide_expression(out.len());
         self.engine.render(out);
         if self.mode == MODE_BEATBOX && self.params[p::MIC] >= 0.5 {
             self.close_mic.process(out);
@@ -976,6 +1114,13 @@ pub extern "C" fn cm_beat_preset(index: i32, steps16: *mut f32, bpm: *mut f32, s
     }
 }
 
+/// A raw MIDI message: status (with its channel) and two data bytes. Notes, pitch bend, channel
+/// and key pressure, CC 74 (MPE slide) and all-notes-off.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_midi(h: *mut ChimeraMpc, status: i32, d1: i32, d2: i32) {
+    guarded(h, |e| e.midi((status & 0xFF) as u8, (d1 & 0x7F) as u8, (d2 & 0x7F) as u8));
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn cm_note_on(h: *mut ChimeraMpc, note: i32, velocity: i32) {
     if !(0..128).contains(&note) {
@@ -1005,7 +1150,8 @@ pub extern "C" fn cm_all_notes_off(h: *mut ChimeraMpc) {
 pub extern "C" fn cm_pitch_bend(h: *mut ChimeraMpc, bend: f32) {
     let b = if bend.is_finite() { bend.clamp(-1.0, 1.0) as f64 } else { 0.0 };
     guarded(h, |e| {
-        e.wheel = pow(2.0, b * BEND_RANGE / 12.0);
+        e.last_bend = ((b + 1.0) * 0.5) as f32;
+        e.bend[0] = e.last_bend;
         e.update_bend();
     });
 }

@@ -77,8 +77,8 @@ enum ParamIndex
     kPitch,         // Play: the pitch without a key, Hz
     kMode,          // Sing / Play / Speak / Beatbox
     kBreathe,       // Play: breathe without a key
-    kRestart,       // Sing: lyrics from the start when the transport starts (not yet)
-    kMpe,           // MPE note channels (not yet)
+    kRestart,       // Sing, Speak: back to Start Syl / Start Line when the transport starts
+    kMpe,           // MPE: channels 2-16 are note channels (bend, pressure, slide per note)
     kLyrics,        // Sing: lyrics slot 1..8
     kStartSyl,      // Sing: the syllable the lyrics start from
     kSpeech,        // Speak: text slot 1..8 (Content/speech.txt)
@@ -86,8 +86,8 @@ enum ParamIndex
     kSpeechRate,    // Speak: speed, x
     kIpa,           // Speak: the text is IPA
     kSpeak,         // Speak: say the next line (on its rise)
-    kConsonant,     // (reserved: the consonant chart)
-    kPadVowel,      // (reserved)
+    kConsonant,     // Speak: say a consonant between two vowels (on a change to one)
+    kPadVowel,      // Speak: the vowel around it
     kBeat,          // Beatbox: a preset pattern, or Your Beat
     kTempo,         // Beatbox: bpm
     kSwing,         // Beatbox: %
@@ -162,8 +162,9 @@ public:
         addParam(mpc::floatParam("speech_rate",  "Speech Rate", 0.5f, 1.8f, 1.0f, "x", 2));
         addParam(mpc::boolParam ("ipa",          "IPA",         false));
         addParam(mpc::boolParam ("speak",        "Speak",       false));
-        addParam(mpc::intParam  ("consonant",    "Consonant",   0, 24, 0));
-        addParam(mpc::choiceParam("pad_vowel",   "Pad Vowel",   {"a", "i", "u"}, 0));
+        // the consonant chart (IPA in the engine; the MPC's font has plain letters)
+        addParam(mpc::choiceParam("consonant",   "Consonant",   {"-", "p", "b", "t", "d", "k", "g", "glottal", "m", "n", "ng", "trill r", "tap", "f", "v", "th", "dh", "s", "z", "sh", "zh", "x", "h", "r", "y", "l"}, 0));
+        addParam(mpc::choiceParam("pad_vowel",   "Pad Vowel",   {"ah", "ee", "oo", "uh"}, 0));
         addParam(mpc::choiceParam("beat",        "Beat",        {"Boots+Cats", "4 on Floor", "Breakbeat", "Rim Shuffle", "Inward Snr", "Clicks+Pops", "Hum Bass", "Your Beat"}, 0));
         addParam(mpc::floatParam("tempo",        "Tempo",       60.0f, 240.0f, d[kTempo], "bpm", 0));
         addParam(mpc::floatParam("swing",        "Swing",       0.0f, 60.0f, d[kSwing] * 100.0f, "%", 0));
@@ -324,12 +325,12 @@ private:
         set(kSwing, swing * 100.0f);
     }
 
+    // Every channel message goes to the engine as it came: notes, pitch bend, channel and key
+    // pressure, CC 74 (MPE slide) and all-notes-off (with MPE, channels 2-16 are note channels).
     void handleMidi(ChimeraMpc* e, const mpc::MidiEvent& m)
     {
-        if (m.isNoteOn()) cm_note_on(e, m.note(), m.velocity());
-        else if (m.isNoteOff()) cm_note_off(e, m.note());
-        else if (m.isAllNotesOff()) cm_all_notes_off(e);
-        else if (m.isPitchBend()) cm_pitch_bend(e, (float)m.pitchBend() / 8192.0f);
+        if (m.size >= 2 && (m.data[0] & 0xF0) >= 0x80 && (m.data[0] & 0xF0) <= 0xE0)
+            cm_midi(e, m.data[0], m.data[1], m.size >= 3 ? m.data[2] : 0);
     }
 
     std::atomic<ChimeraMpc*> engine_{nullptr};

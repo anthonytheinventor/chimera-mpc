@@ -23,7 +23,8 @@ CHIMERA MPC is an independent project, not made or endorsed by Jameson Hodge.
   of lines in `Content/speech.txt` (blocks separated by a blank line); **Start Line** sets where it
   starts and **Speech Rate** how fast it talks. C3 speaks at the body's natural pitch; other keys
   move the whole line up or down, up to two octaves. With **IPA** on, the text is read as IPA.
-  **Speak** says the next line without a key.
+  **Speak** says the next line without a key. **Consonant** says one consonant between two
+  vowels, as CHIMERA's consonant chart does; **Pad Vowel** picks the vowel around it.
 - **Beatbox**: a 16-step pattern of beatbox sounds. **Beat** picks one of CHIMERA's seven patterns
   (it fills the steps, Tempo and Swing) or keeps **Your Beat**. **Play Beat** runs it on its own
   tempo; with **Follow Host** on, it plays along with the MPC's sequencer while that runs. Keys
@@ -34,7 +35,9 @@ CHIMERA MPC is an independent project, not made or endorsed by Jameson Hodge.
 With **Restart** on, Sing and Speak start again from Start Syl and Start Line each time the MPC's
 transport starts.
 
-The pitch wheel bends ±2 semitones.
+The pitch wheel bends ±2 semitones, and channel or key pressure (aftertouch) breathes harder.
+With **MPE** on, MIDI channels 2 to 16 carry one note each: its own bend (±48 semitones),
+pressure, and slide (CC 74), which moves the brightness.
 
 ## Parameters
 
@@ -43,10 +46,10 @@ The pitch wheel bends ±2 semitones.
 | SING | Mode, Lyrics, Start Syl, Body; Vibrato, Vib Rate, Breathy, Ring; Breath, Pressed, Bright, Glide; Rough, Fry, Twang, False Folds |
 | PLAY | Pitch, Breath, Pressed, Vibrato; Bright, Breathy, Rough, Fry; Rounding, Lips Open, Protrude, Jaw; Soft Palate, Larynx, Breathe, Whisper |
 | VOWEL | Front, Open, Tongue Root, Tip Curl; Tongue Fwd, Tongue Up, Tip Fwd, Tip Up |
-| SPEAK | Mode, Speech, Start Line, Speak; Speech Rate, IPA, Body, Gain; Breath, Pressed, Bright, Glide; Breathy, Rough, Fry, Ring |
+| SPEAK | Mode, Speech, Start Line, Speak; Speech Rate, IPA, Body, Gain; Breath, Pressed, Bright, Glide; Breathy, Rough, Consonant, Pad Vowel |
 | BEATBOX | Step 1 to Step 16 |
 | KIT | Beat, Tempo, Swing, Play Beat; Follow Host, Mic FX, Pad, Mode; Breath, Pressed, Bright, Glide |
-| BODY | Body (Male, Female, Child, Blend), Female and Child (Blend), Gain |
+| BODY | Body (Male, Female, Child, Blend), Female and Child (Blend), Gain; MPE, Restart |
 
 - **Breath** is the lung pressure (cmH2O). **Pressed** is how tightly the vocal folds close.
 - **Bright**, **Breathy**, **Rough** and **Fry** shape the sound of the vocal folds. **Whisper**
@@ -57,7 +60,6 @@ The pitch wheel bends ±2 semitones.
 - **Blend** mixes the bodies with **Female** and **Child**. Building a blended voice takes a
   moment: the previous body keeps playing until it is ready.
 - A step's **m** (hum) plays at a fixed pitch; the Hum Bass pattern's own hum notes are not kept.
-- **MPE**, **Consonant** and **Pad Vowel** are reserved for the next version.
 
 ## How it fits on a 32-bit MPC
 

@@ -26,8 +26,18 @@ use std::time::Duration;
 
 /// Each slot's lyrics as the Singer holds them.
 pub type Lyrics = Vec<Vec<LiveSyllable>>;
-/// Each slot's spoken lines, planned for each preset body: slot -> body -> line -> gestures.
-pub type Speech = Vec<[Vec<Vec<Gesture>>; 3]>;
+/// What Speak says, planned for each preset body.
+pub struct Speech {
+    /// slot -> body -> line -> gestures
+    pub lines: Vec<[Vec<Vec<Gesture>>; 3]>,
+    /// the consonant chart: consonant -> vowel around it -> body -> gestures
+    pub pads: Vec<[[Vec<Gesture>; 3]; 4]>,
+}
+
+/// The consonant chart's sounds (the Consonant parameter's choices after "-"), and the vowels
+/// that can go around them (Pad Vowel), as CHIMERA's chart offers them.
+pub const CONSONANTS: [&str; 25] = ["p", "b", "t", "d", "k", "g", "ʔ", "m", "n", "ŋ", "r", "ɾ", "f", "v", "θ", "ð", "s", "z", "ʃ", "ʒ", "x", "h", "ɹ", "j", "l"];
+pub const PAD_VOWELS: [&str; 4] = ["ɑ", "i", "u", "ə"];
 
 /// What the audio thread asks for. It writes the whole request when something changes.
 #[derive(Clone, Copy, PartialEq)]
@@ -138,15 +148,31 @@ fn plan_line(phrases: &[Phrase], body: BodyMix, rate: f64) -> Vec<Gesture> {
     plan_phrases(&input, &PlanOptions { body, t0: 0.0, rate: Some(rate), f0: Some(default_f0(body)), ..Default::default() }).gestures
 }
 
+/// One consonant between two vowels, in flat intonation, as CHIMERA's chart says it.
+fn plan_pad(ipa: &str, body: BodyMix, rate: f64) -> Vec<Gesture> {
+    plan_line(&[Phrase { segments: tokenize_ipa(ipa), intonation: Intonation::Flat, pause: 0.25, words: Vec::new() }], body, rate)
+}
+
 fn plan_speech(slots: &[Vec<String>], g2p: &EnglishG2P, rate: f64, ipa: bool) -> Speech {
-    slots
+    let pads = CONSONANTS
+        .iter()
+        .map(|c| {
+            let per_vowel = |v: &str| {
+                let say = format!("ˈ{v}{c}{v}");
+                [plan_pad(&say, BODIES[0], rate), plan_pad(&say, BODIES[1], rate), plan_pad(&say, BODIES[2], rate)]
+            };
+            [per_vowel(PAD_VOWELS[0]), per_vowel(PAD_VOWELS[1]), per_vowel(PAD_VOWELS[2]), per_vowel(PAD_VOWELS[3])]
+        })
+        .collect();
+    let lines = slots
         .iter()
         .map(|lines| {
             let phrases: Vec<Vec<Phrase>> = lines.iter().map(|l| if ipa { ipa_phrases(l) } else { g2p.to_phrases(l) }).filter(|p| !p.is_empty()).collect();
             let per_body = |b: usize| phrases.iter().map(|p| plan_line(p, BODIES[b], rate)).collect::<Vec<_>>();
             [per_body(0), per_body(1), per_body(2)]
         })
-        .collect()
+        .collect();
+    Speech { lines, pads }
 }
 
 fn run(hub: &Hub, fs: f64, content: Option<&str>) {

@@ -266,3 +266,88 @@ fn restart_starts_the_lyrics_over_when_the_transport_starts() {
     println!("restarted {a:.4}, fresh {b:.4}");
     assert!((20.0 * (a / b).log10()).abs() < 3.0);
 }
+
+/// The pitch (Hz) of a steady stretch: the autocorrelation's highest peak between 60 and 600 Hz,
+/// looked for only after it first dips below zero (else the shortest lag always wins).
+fn pitch_of(x: &[f32]) -> f64 {
+    let (lo, hi) = ((FS / 600.0) as usize, (FS / 60.0) as usize);
+    let n = x.len() - hi;
+    let ac = |lag: usize| -> f64 { (0..n).map(|i| x[i] as f64 * x[i + lag] as f64).sum() };
+    let mut lag = 1;
+    while lag < hi && ac(lag) > 0.0 {
+        lag += 1;
+    }
+    let mut best = (f64::MIN, lo);
+    for l in lag.max(lo)..hi {
+        let c = ac(l);
+        if c > best.0 {
+            best = (c, l);
+        }
+    }
+    FS / best.1 as f64
+}
+
+#[test]
+fn the_consonant_chart_says_a_consonant_between_two_vowels() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 2.0);
+    r.wait_for_lyrics();
+    r.out.clear();
+    for (c, v) in [(17.0, 0.0), (3.0, 1.0), (19.0, 2.0)] {
+        // s between ah, t between ee, sh between oo
+        r.set(p::PAD_VOWEL, v);
+        r.set(p::CONSONANT, c);
+        r.render(0.9);
+        r.set(p::CONSONANT, 0.0);
+        r.render(0.05);
+    }
+    assert!(r.out.iter().all(|x| x.is_finite()) && rms(&r.out) > 0.005, "silent: {}", rms(&r.out));
+    write_wav("speak_consonants.wav", &r.out);
+}
+
+#[test]
+fn mpe_bends_a_note_on_its_own_channel_and_pressure_breathes_harder() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 1.0);
+    r.set(p::VIBRATO, 0.0);
+    r.set(p::MPE, 1.0);
+    r.render(0.05); // the engine takes the parameters at its next render
+    // a note on channel 3, then that channel bent up 12 semitones (of 48)
+    cm_midi(r.h, 0x92, 57, 100);
+    r.render(0.8);
+    let a = r.out.len();
+    r.render(0.4);
+    let plain = pitch_of(&r.out[a..]);
+    let up = (8192.0 + 8191.0 * 12.0 / 48.0) as u32;
+    cm_midi(r.h, 0xE2, (up & 127) as i32, (up >> 7) as i32);
+    r.render(0.8);
+    let b = r.out.len();
+    r.render(0.4);
+    let bent = pitch_of(&r.out[b..]);
+    println!("MPE: {plain:.1} Hz, bent {bent:.1} Hz");
+    assert!((bent / plain - 2.0).abs() < 0.08, "an octave up: {plain:.1} -> {bent:.1}");
+    // channel pressure raises the breath: stronger high harmonics (the voice's own limiter keeps
+    // the level, so loudness is not the measure), as the first difference's share of the signal
+    let bright = |x: &[f32]| rms(&x.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>()) / rms(x);
+    let c = r.out.len();
+    r.render(0.5);
+    let soft = bright(&r.out[c..]);
+    cm_midi(r.h, 0xD2, 127, 0);
+    r.render(0.5);
+    let d = r.out.len();
+    r.render(0.5);
+    let hard = bright(&r.out[d..]);
+    println!("pressure: high-harmonic share {soft:.4} -> {hard:.4}");
+    assert!(hard > soft * 1.05);
+    // without MPE, the same channel's bend is the wheel (2 semitones)
+    r.set(p::MPE, 0.0);
+    r.render(0.6);
+    let e = r.out.len();
+    r.render(0.4);
+    let wheel = pitch_of(&r.out[e..]);
+    println!("no MPE: {wheel:.1} Hz");
+    // 12/48 of the way up the wheel's +-2 semitones: half a semitone
+    assert!((wheel / plain - 2f64.powf(0.5 / 12.0)).abs() < 0.02);
+    cm_midi(r.h, 0x82, 57, 0);
+    write_wav("mpe.wav", &r.out);
+}
