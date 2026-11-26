@@ -88,7 +88,8 @@ DIAL = 64                                # dial film-strip frame (ring radius 21
 KNOB_FRAMES = 33
 HEAD_BOX = (SX + 2, TOP + 28, SW - 4, BOT - TOP - 30)   # where the head is drawn: 682 80 584 540
 FACE_SCALE = 27.0                        # px per cm
-VIEW_X0, VIEW_Y1 = -6.2, 18.6            # body cm at HEAD_BOX's top-left corner
+VIEW_X0, VIEW_Y1 = -6.2, 18.6            # body cm at HEAD_BOX's top-left corner (before mirroring)
+FACE_LEFT = True                         # the head faces left, in toward the controls (the screen is on the right)
 MAIN_BTN = (12, 4, 150, 40)              # the page's main button (amber)
 PAGE_CHIPS_X = 170                       # the page's own chips start here
 MODE_CHIPS = [("SING", 552, 104), ("PLAY", 664, 104), ("SPEAK", 776, 104), ("BEATBOX", 888, 128)]
@@ -376,8 +377,9 @@ def caption(text, px, color, track=0.1, o=1.0, path=None):
 # The face (design.md B.6, step 1)
 # --------------------------------------------------------------------------------------------
 def hp(p):
-    """body cm -> px inside HEAD_BOX"""
-    return ((p[0] - VIEW_X0) * FACE_SCALE, (VIEW_Y1 - p[1]) * FACE_SCALE)
+    """body cm -> px inside HEAD_BOX (mirrored when FACE_LEFT: the engine's profile faces right)"""
+    x = (p[0] - VIEW_X0) * FACE_SCALE
+    return (HEAD_BOX[2] - x if FACE_LEFT else x, (VIEW_Y1 - p[1]) * FACE_SCALE)
 
 
 def chaikin(pts, it=1):
@@ -886,9 +888,11 @@ def face_screen(b, ch, page, face):
     if page.get("readouts"):
         # the slot readouts under the chin (design.md B.3), as live values of the knobs that set them;
         # TONGUE (nearest vowel) needs a new display parameter and is left for step 2
-        bx, by = SX + 330, TOP + 452
+        # in front of the neck: right of it when the head faces right, left of it when it faces left
+        bx, by = (SX + 14 if FACE_LEFT else SX + 330), TOP + 452
+        cells = ((bx, by), (bx + 128, by + 58), (bx, by + 58)) if FACE_LEFT else ((bx + 128, by), (bx, by + 58), (bx + 128, by + 58))
         for (lab, unit, pname, slot), (cx, cy) in zip((("JAW", "CM", "Jaw", 1), ("LIPS", "CM", "Lips Open", 2), ("VELUM", "CM2", "Soft Palate", 3)),
-                                                      ((bx + 128, by), (bx, by + 58), (bx + 128, by + 58))):
+                                                      cells):
             color = SLOTS[slot]
             fdot, dx, dy = baked(("dot", lab, unit, color), 120, 20, lambda ink, mm, lab=lab, unit=unit, color=color: (
                 ink.circle(mm + 5, mm + 7, 4.5, color, fill=True),
@@ -896,8 +900,10 @@ def face_screen(b, ch, page, face):
             b.pic(ch, fdot, cx + dx, cy + dy)
             b.label(ch, params[pname], (cx - 2, cy + 15, 126, 42), 34, light(color), "left verticallyCentred")
     if page.get("credit"):
-        b.cap(ch, SX + SW - 16, TOP + 470, "VOICE: CHIMERA", 12, QUIET, "r", 0.1)
-        b.cap(ch, SX + SW - 16, TOP + 490, "BY JAMESON HODGE (MIT)", 12, QUIET, "r", 0.1)
+        # in front of the neck, like the readouts
+        cx, just = (SX + 16, "l") if FACE_LEFT else (SX + SW - 16, "r")
+        b.cap(ch, cx, TOP + 470, "VOICE: CHIMERA", 12, QUIET, just, 0.1)
+        b.cap(ch, cx, TOP + 490, "BY JAMESON HODGE (MIT)", 12, QUIET, just, 0.1)
     if page.get("left") == "steps":
         # the beat's name and tempo at the top right (the hit symbol and step need new parameters: step 2)
         b.label(ch, params["Beat"], (SX + SW - 300, TOP + 38, 284, 30), 22.0, AMBER, "right verticallyCentred", "Regular")
