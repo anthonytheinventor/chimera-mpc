@@ -278,26 +278,35 @@ with the other tracks.
 3. Load CHIMERA MPC as the plugin on a track. For the pads in Beatbox, set the track's Note Mapping to
    Chromatic C1.
 
-<details>
-<summary><b>How it fits on a 32-bit MPC</b></summary>
-<br>
+## Made to fit a 32-bit MPC
 
-CHIMERA's engine is unchanged in what it models. To fit:
+CHIMERA simulates the airway sample by sample, and as its desktop plugin runs it, the engine needs 2.4
+to 2.8 times everything one core of an MPC One+ can do. The port was made to fit with
+[**mpc-plugin-optimize**](https://github.com/anthonytheinventor/mpc-plugin-optimize), a Claude skill for
+cutting the CPU cost of MPC plugin DSP on the 32-bit models. It times each change on the device, counts
+instructions per function under an emulator, reads the compiled code for costly patterns, and takes one
+change at a time, checking the output after each: bit for bit where a change should be exact, and
+against a 4x oversampled reference where it trades accuracy for speed.
 
-- the engine runs the airway at the sample rate, without CHIMERA's usual 2x oversampling;
-- it uses longer sections in the trachea and nose;
-- it updates the mouth shape every 4 control steps;
-- it computes the airway in single precision with the MPC's vector unit.
+CHIMERA's engine is unchanged in what it models. What changed:
 
-Measured on an MPC One+:
+- **exact speedups**: geometry lookups through a box index, cached wall terms, a hardware square root;
+- **settings for the MPC**: the airway at the sample rate instead of oversampled, longer sections in the
+  trachea and nose, the mouth's shape worked out every 4 control steps;
+- **the airway in single precision** on the MPC's vector unit (NEON), with its ports and joints kept in
+  compact structures;
+- **a notch at a quarter of the sample rate**, which removes the chirp that updating the geometry every
+  few samples leaves on consonants.
 
-| | CPU, of a 128-frame block |
+Measured on an MPC One+, speaking, as a share of a 128-frame block:
+
+| Step | CPU |
 |---|---|
-| Playing | about 19 % |
-| Playing, 99th percentile | about 27 % |
-| Idle | 0.5 % |
-
-</details>
+| CHIMERA's engine as its desktop plugin runs it (2x oversampling) | 244 to 283 % |
+| Without oversampling | 126 to 145 % |
+| Exact speedups and MPC settings | about 31 % |
+| Single-precision NEON airway | about 20 % |
+| **Now** | **about 19 %** (99th percentile about 27 %, idle 0.5 %) |
 
 <details>
 <summary><b>Build from source</b></summary>
