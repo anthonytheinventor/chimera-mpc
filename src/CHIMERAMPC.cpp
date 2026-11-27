@@ -466,6 +466,7 @@ public:
         padSeen_ = false;
         beatSeen_ = false;
         slotsSeen_ = false;
+        learnSeen_ = false;
         lastTyping_ = -1;   // a load's slot and cursor are taken as they are
         hitDark_.store(true, std::memory_order_release);   // the helper thread darkens the pads
         // a state load sets the momentary controls too (to whatever was saved): those are not taps.
@@ -489,6 +490,7 @@ public:
         followVowelPad(e);
         followBeatPreset();
         followSlots();
+        followLearn();
         // the squares' hum notes and accents (the engine applies them when they change)
         float stepNotes[16], stepAccents[16];
         for (int i = 0; i < 16; ++i)
@@ -766,6 +768,8 @@ private:
             }
             // Learn's result, at once (it is not a knob sweep)
             if (padLearned_.exchange(false, std::memory_order_acq_rel)) notifyHostParameterChanged(kPadNotes);
+            // a Learn button switched the mode to Beatbox: the mode chips show it at once
+            if (modeSwitched_.exchange(false, std::memory_order_acq_rel)) notifyHostParameterChanged(kMode);
             // the last note played, in Beatbox (BEATBOX shows it): reported when it changes (the
             // same pad again changes nothing), held while a setting moves, as the pads are
             const int note = lastNote_.load(std::memory_order_relaxed);
@@ -926,6 +930,21 @@ private:
     // are kept the same, so the text on the screen is the text the voice says: turning either one
     // moves the other, and switching Type Into shows the slot that target plays. After a load
     // (reset) the values are taken as they are, so a project saves back exactly as it loaded.
+    // Tapping LEARN PAD 1 or LEARN ALL 16 (Pad 1 Note moving to Learn or Learn All) switches the
+    // mode to Beatbox: the pads only play the squares, and learn, there. A load is taken as it is.
+    void followLearn()
+    {
+        const int pads = getInt(kPadNotes);
+        const bool learning = pads == kPadLearn || pads == kPadLearnAll;
+        if (learnSeen_ && learning && pads != lastPadNotes_ && getInt(kMode) != 3)
+        {
+            set(kMode, 3.0f);
+            modeSwitched_.store(true, std::memory_order_release);   // the helper thread tells the host
+        }
+        learnSeen_ = true;
+        lastPadNotes_ = pads;
+    }
+
     void followSlots()
     {
         const int into = getInt(kTypeInto);
@@ -965,6 +984,7 @@ private:
     std::atomic<int> velumFrame_{0}, hitPad_{0}, hitCount_{0}, stepPad_{0}, stepCount_{0}, lastNote_{-1};
     std::atomic<bool> padLearned_{false};
     std::atomic<int> learnNext_{-1};
+    std::atomic<bool> modeSwitched_{false};
     std::atomic<int> faceNow_[kFaceLayers] = {};
     int faceFrames_[kFaceLayers] = {10, 28, 18, 12, 7, 6};   // cm_face_frames
     int stripTurn_ = 0;                                 // the helper thread's
@@ -984,6 +1004,8 @@ private:
     bool padSeen_ = false;
     bool beatSeen_ = false;
     bool slotsSeen_ = false;
+    bool learnSeen_ = false;
+    int lastPadNotes_ = 0;
     int lastInto_ = 0, lastTypeSlot_ = 0, lastPlaying_ = 0;
     int lastBeat_ = 0;
     float padFront_ = 0.0f, padOpen_ = 0.0f;
