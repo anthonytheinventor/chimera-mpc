@@ -1164,38 +1164,40 @@ def face_screen(b, ch, page, face):
     if page.get("now_next"):
         now_next_block(b, ch, page["now_next"])
     if page.get("left") in ("steps", "notes"):
-        # the beat's name and tempo at the top right (the hit symbol and step need new parameters: step 2)
-        # the beat's name: tapped, it takes the focus and the data wheel picks another (double tap:
-        # the list)
+        # the beat's block, in front of the face (left of the nose and mouth, where no frame of the
+        # moving layers reaches), as one left-aligned column: the beat's name (tapped, it takes the
+        # focus and the data wheel picks another; double tap: the list) and the tempo
+        x0, w0 = SX + 14, 170
         beat = b.ref(params["Beat"])
 
         def beat_def():
             return G.component_definition(G.control_actions("menu overlay"), [
-                focus_entry(AMBER, 284, 30),
-                G.entry("name", "Label", label_data("Value", argb(AMBER), 22.0, "right verticallyCentred", "Regular"),
-                        rect_str(0, 0, 278, 30), "No", "Show", "Always")], "00000000")
+                focus_entry(AMBER, w0, 32),
+                G.entry("name", "Label", label_data("Value", argb(AMBER), 22.0, "left verticallyCentred", "Regular"),
+                        rect_str(6, 0, w0 - 6, 32), "No", "Show", "Always")], "00000000")
         dn = b.need("chimBeatName", beat_def)
-        ch.append(G.entry("beat name", dn, G.obj(("version", 1), ("handleName", "Data")), rect_str(SX + SW - 300, TOP + 38, 284, 30),
+        ch.append(G.entry("beat name", dn, G.obj(("version", 1), ("handleName", "Data")), rect_str(x0 - 6, TOP + 40, w0, 32),
                           "Yes", "Show", "Always", remap=[("Data", beat.handle)]))
-        b.label(ch, params["Tempo"], (SX + SW - 160, TOP + 70, 100, 26), 20.0, LABEL, "right verticallyCentred", "Regular")
-        b.cap(ch, SX + SW - 54, TOP + 77, "BPM", 12, AMBER, "l", 0.1, 0.8)
+        b.label(ch, params["Tempo"], (x0, TOP + 74, 44, 26), 20.0, LABEL, "left verticallyCentred", "Regular")
+        b.cap(ch, x0 + 48, TOP + 82, "BPM", 12, AMBER, "l", 0.1, 0.8)
     if page.get("left") == "notes":
         # how the squares' notes work, in front of the neck (the widest free place below the chin)
         for k, line in enumerate(("Q-LINK N: SQUARE N'S HUM NOTE", "-: THE HUM'S OWN NOTE (40 E1)", "ACCENT: 1.3X, ANY SOUND")):
             b.cap(ch, SX + 14, TOP + 508 + k * 20, line, 12, QUIET, "l", 0.1)
     if page.get("left") == "steps":
-        # the pads' notes: the note last played (one tap on a pad shows what it sends), Pad 1 Note,
-        # and LEARN (lit while Pad 1 Note says Learn: the next note is pad 1's)
-        b.cap(ch, SX + SW - 138, TOP + 112, "LAST NOTE", 12, QUIET, "r", 0.1)
-        b.label(ch, params["Last Note"], (SX + SW - 128, TOP + 104, 112, 26), 20.0, LABEL, "right verticallyCentred", "Regular")
-        b.cap(ch, SX + SW - 138, TOP + 142, "PAD 1", 12, QUIET, "r", 0.1)
-        b.label(ch, params["Pad 1 Note"], (SX + SW - 128, TOP + 134, 112, 26), 20.0, LABEL, "right verticallyCentred", "Regular")
+        # under the tempo, the pads' notes: the note last played (one tap on a pad shows what it
+        # sends), Pad 1 Note, and the two Learn buttons
+        x0 = SX + 14
+        b.cap(ch, x0, TOP + 124, "LAST NOTE", 12, QUIET, "l", 0.1)
+        b.label(ch, params["Last Note"], (x0, TOP + 140, 150, 26), 20.0, LABEL, "left verticallyCentred", "Regular")
+        b.cap(ch, x0, TOP + 178, "PAD 1", 12, QUIET, "l", 0.1)
+        b.label(ch, params["Pad 1 Note"], (x0, TOP + 194, 150, 26), 20.0, LABEL, "left verticallyCentred", "Regular")
         # (Pad 1 Note has more steps than host_sim lists as choices: Learn and Learn All by number)
         on, off = chip_files("LEARN PAD 1", 128, 34, px=13)
-        b.button(ch, params["Pad 1 Note"], on, off, PAD_LEARN, PAD_STEPS, SX + SW - 144, TOP + 168, name="learn pad 1")
+        b.button(ch, params["Pad 1 Note"], on, off, PAD_LEARN, PAD_STEPS, x0, TOP + 234, name="learn pad 1")
         # Learn All: hit pads 1 to 16 in turn; the square to hit next stays lit
         on, off = chip_files("LEARN ALL 16", 128, 34, px=13)
-        b.button(ch, params["Pad 1 Note"], on, off, PAD_LEARN_ALL, PAD_STEPS, SX + SW - 144, TOP + 210, name="learn all pads")
+        b.button(ch, params["Pad 1 Note"], on, off, PAD_LEARN_ALL, PAD_STEPS, x0, TOP + 276, name="learn all pads")
         # how Learn All goes, in front of the neck (the widest free place below the chin)
         for k, line in enumerate(("LEARN ALL 16: HIT PADS 1 TO 16 IN TURN,", "THE LIT SQUARE'S PAD NEXT (ANY LAYOUT:", "CHROMATIC, A KEY, A BANK)")):
             b.cap(ch, SX + 14, TOP + 508 + k * 20, line, 12, QUIET, "l", 0.1)

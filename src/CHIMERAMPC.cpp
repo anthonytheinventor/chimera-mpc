@@ -504,6 +504,17 @@ public:
         cm_pad_map(e, padMap);
         const mpc::Transport& t = ctx.transport;
         cm_transport(e, t.playing ? 1 : 0, t.tempoValid ? 1 : 0, t.bpm, t.ppqValid ? 1 : 0, t.ppqPos, ctx.numFrames);
+        // with Follow Host on, Tempo is the MPC's (stopped too, when it gives one): Play Beat runs at
+        // it and the screen shows it (the helper thread tells the host)
+        if (getBool(kFollow) && t.tempoValid && t.bpm > 0.0)
+        {
+            const float bpm = (float)std::min(240.0, std::max(60.0, t.bpm));
+            if (std::fabs(get(kTempo) - bpm) > 0.05f)
+            {
+                set(kTempo, bpm);
+                tempoFollowed_.store(true, std::memory_order_release);
+            }
+        }
 
         // the parameters, in the engine's units (it applies only what changed)
         float v[kEngineParams];
@@ -770,6 +781,8 @@ private:
             if (padLearned_.exchange(false, std::memory_order_acq_rel)) notifyHostParameterChanged(kPadNotes);
             // a Learn button switched the mode to Beatbox: the mode chips show it at once
             if (modeSwitched_.exchange(false, std::memory_order_acq_rel)) notifyHostParameterChanged(kMode);
+            // the MPC's tempo came into Tempo (Follow Host): shown once settings rest
+            if (knobLooks == 0 && tempoFollowed_.exchange(false, std::memory_order_acq_rel)) notifyHostParameterChanged(kTempo);
             // the last note played, in Beatbox (BEATBOX shows it): reported when it changes (the
             // same pad again changes nothing), held while a setting moves, as the pads are
             const int note = lastNote_.load(std::memory_order_relaxed);
@@ -985,6 +998,7 @@ private:
     std::atomic<bool> padLearned_{false};
     std::atomic<int> learnNext_{-1};
     std::atomic<bool> modeSwitched_{false};
+    std::atomic<bool> tempoFollowed_{false};
     std::atomic<int> faceNow_[kFaceLayers] = {};
     int faceFrames_[kFaceLayers] = {10, 28, 18, 12, 7, 6};   // cm_face_frames
     int stripTurn_ = 0;                                 // the helper thread's

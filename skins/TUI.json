@@ -3189,7 +3189,7 @@
                                     "showWhenDataModelInvalid": "Show",
                                     "whenVisible": "WhenFocussed",
                                     "boundsType": "Absolute",
-                                    "bounds": "0 0 284 30"
+                                    "bounds": "0 0 170 32"
                                 }
                             },
                             {
@@ -3209,7 +3209,7 @@
                                                 "height": 22.0
                                             },
                                             "colour": "ffffb340",
-                                            "justification": "right verticallyCentred",
+                                            "justification": "left verticallyCentred",
                                             "case": "Original"
                                         },
                                         "type": "Value",
@@ -3226,7 +3226,7 @@
                                     "showWhenDataModelInvalid": "Show",
                                     "whenVisible": "Always",
                                     "boundsType": "Absolute",
-                                    "bounds": "0 0 278 30"
+                                    "bounds": "6 0 164 32"
                                 }
                             }
                         ]
@@ -24761,7 +24761,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "968 90 284 30"
+                                "bounds": "688 92 170 32"
                             }
                         },
                         {
@@ -24781,7 +24781,7 @@
                                             "height": 20.0
                                         },
                                         "colour": "ffa9dcf8",
-                                        "justification": "right verticallyCentred",
+                                        "justification": "left verticallyCentred",
                                         "case": "Original"
                                     },
                                     "type": "Value",
@@ -24803,7 +24803,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "1108 122 100 26"
+                                "bounds": "694 126 44 26"
                             }
                         },
                         {
@@ -24829,7 +24829,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "1207 124 37 22"
+                                "bounds": "735 129 37 22"
                             }
                         },
                         {
@@ -24855,7 +24855,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "1063 159 72 22"
+                                "bounds": "687 171 72 22"
                             }
                         },
                         {
@@ -24875,7 +24875,7 @@
                                             "height": 20.0
                                         },
                                         "colour": "ffa9dcf8",
-                                        "justification": "right verticallyCentred",
+                                        "justification": "left verticallyCentred",
                                         "case": "Original"
                                     },
                                     "type": "Value",
@@ -24897,7 +24897,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "1140 156 112 26"
+                                "bounds": "694 192 150 26"
                             }
                         },
                         {
@@ -24923,7 +24923,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "1091 189 45 22"
+                                "bounds": "687 225 45 22"
                             }
                         },
                         {
@@ -24943,7 +24943,7 @@
                                             "height": 20.0
                                         },
                                         "colour": "ffa9dcf8",
-                                        "justification": "right verticallyCentred",
+                                        "justification": "left verticallyCentred",
                                         "case": "Original"
                                     },
                                     "type": "Value",
@@ -24965,7 +24965,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "1140 186 112 26"
+                                "bounds": "694 246 150 26"
                             }
                         },
                         {
@@ -24994,7 +24994,7 @@
                                 "showWhenDataModelInvalid": "Hide",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "1124 220 128 34"
+                                "bounds": "694 286 128 34"
                             }
                         },
                         {
@@ -25023,7 +25023,7 @@
                                 "showWhenDataModelInvalid": "Hide",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "1124 262 128 34"
+                                "bounds": "694 328 128 34"
                             }
                         },
                         {
@@ -31620,7 +31620,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "968 90 284 30"
+                                "bounds": "688 92 170 32"
                             }
                         },
                         {
@@ -31640,7 +31640,7 @@
                                             "height": 20.0
                                         },
                                         "colour": "ffa9dcf8",
-                                        "justification": "right verticallyCentred",
+                                        "justification": "left verticallyCentred",
                                         "case": "Original"
                                     },
                                     "type": "Value",
@@ -31662,7 +31662,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "1108 122 100 26"
+                                "bounds": "694 126 44 26"
                             }
                         },
                         {
@@ -31688,7 +31688,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "1207 124 37 22"
+                                "bounds": "735 129 37 22"
                             }
                         },
                         {

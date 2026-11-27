@@ -131,9 +131,10 @@ A 16-step pattern of beatbox sounds, every one of them made by the mouth.
 
 - **Beat** picks one of CHIMERA's seven patterns (it fills the steps, their hum notes and accents,
   Tempo and Swing) or keeps **Your Beat**. It's the first knob on KIT; on BEATBOX, tap the beat's name
-  (top right) and turn the data wheel, or double-tap it for the list.
-- **Play Beat** runs it on its own tempo. With **Follow Host** on, it plays along with the MPC's
-  sequencer while that runs.
+  (in front of the face) and turn the data wheel, or double-tap it for the list.
+- With **Follow Host** on (the default), Tempo is the MPC's tempo, so **Play Beat** runs at it, and
+  while the MPC's sequence runs the beat plays along with it. With Follow Host off, **Play Beat** runs
+  on the beat's own Tempo.
 - The MPC's pads 1-16 each play the sound in the BEATBOX square with the same number, and the square
   lights up. The beat lights its squares as it plays them.
 - The squares are laid out as the MPC's pads, 1-4 on the bottom row and 13-16 on top, and Q-Link n turns
