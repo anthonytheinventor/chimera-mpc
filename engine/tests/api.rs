@@ -910,3 +910,83 @@ fn while_the_sequence_runs_sung_vowels_land_a_fixed_time_after_their_notes() {
     assert!(stra0 > ah0 + 40.0, "live, 'stra' should reach its vowel later: ah {ah0:.0}, stra {stra0:.0} ms");
     assert!(ah0 < ah - 60.0, "live notes should be immediate: {ah0:.0} vs {ah:.0} ms");
 }
+
+impl Rig {
+    fn wait_for_body(&mut self, secs: usize) -> bool {
+        for _ in 0..secs * 40 {
+            self.render(0.025);
+            if cm_body_ready(self.h) == 1 {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        false
+    }
+}
+
+#[test]
+fn the_same_blend_after_a_preset_is_built_again() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 1.0);
+    r.set(p::BODY, 3.0);
+    r.set(p::BODY_FEMALE, 0.5);
+    r.set(p::BODY_CHILD, 0.3);
+    assert!(r.wait_for_body(10), "the first blend never arrived");
+    r.set(p::BODY, 0.0);
+    r.render(0.2);
+    assert_eq!(cm_body_ready(r.h), 1);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    r.render(0.2);
+    r.set(p::BODY, 3.0);
+    assert!(r.wait_for_body(10), "back to the same Blend mix, the blended voice never arrives");
+}
+
+#[test]
+fn a_parked_voice_brings_back_no_stale_beat_hits() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 3.0);
+    r.set(p::MIC, 0.0);
+    r.set(p::PLAY_BEAT, 1.0);
+    r.render(1.03);
+    // switch body and stop the beat in the same block, then back to the first body
+    r.set(p::BODY, 1.0);
+    r.set(p::PLAY_BEAT, 0.0);
+    r.render(1.5);
+    r.set(p::BODY, 0.0);
+    r.out.clear();
+    r.render(0.6);
+    assert!(rms(&r.out) < 0.002, "stale hits from the parked voice: rms {}", rms(&r.out));
+}
+
+/// How long Speak's first and second lines sound (s), with or without a body change between.
+fn speak_two_lines(change_body: bool) -> (f64, f64) {
+    let mut r = Rig::new();
+    r.set(p::MODE, 2.0);
+    r.set(p::SPEECH, 1.0);
+    r.wait_for_lyrics();
+    let mut voiced = |r: &mut Rig, s: f64| {
+        r.out.clear();
+        r.render(s);
+        r.out.chunks(128).filter(|c| (c.iter().map(|x| x * x).sum::<f32>() / 128.0).sqrt() > 0.003).count() as f64 * 128.0 / FS
+    };
+    cm_note_on(r.h, 60, 100);
+    let a = voiced(&mut r, 3.0);
+    cm_note_off(r.h, 60);
+    if change_body {
+        r.set(p::BODY, 1.0);
+        r.render(0.1);
+        r.set(p::BODY, 0.0);
+        r.render(0.1);
+    }
+    cm_note_on(r.h, 60, 100);
+    let b = voiced(&mut r, 4.0);
+    (a, b)
+}
+
+#[test]
+fn a_body_change_keeps_the_next_line() {
+    let plain = speak_two_lines(false);
+    let changed = speak_two_lines(true);
+    eprintln!("plain {plain:?}, with a body change {changed:?}");
+    assert!((changed.1 - plain.1).abs() < 0.3, "after a body change the second note said another line: {changed:?} vs {plain:?}");
+}

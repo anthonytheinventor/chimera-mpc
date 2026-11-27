@@ -474,6 +474,9 @@ impl ChimeraMpc {
         self.engine.voice_mut().output_gain = self.base_gain * self.gain_now;
         // the new voice's clock starts at zero: the beat's hits are looked at from there
         self.hit_clock = self.engine.clock();
+        // the outgoing voice is parked (a preset) or thrown out (a blend): what it still had
+        // scheduled (beat hits, a pad, a line) must not play when it comes back
+        voice.cancel_score();
         match self.playing {
             Playing::Preset(b) => self.voices[b] = Some(voice),
             Playing::Blend(_) => self.trash(Trash::Voice(voice)),
@@ -484,9 +487,11 @@ impl ChimeraMpc {
         // (the lyrics stay: the singer keeps its syllables)
         // (the lyrics stay: the singer keeps its syllables; the momentary controls keep what they
         // had, or a held pad, consonant or key would act again)
+        // (and the start syllable, speech slot and start line keep theirs, or a body change
+        // would send Sing and Speak back to where they start)
         let kept = self.applied;
         self.applied = [f32::NAN; p::COUNT];
-        for i in [p::LYRICS, p::SPEAK, p::CONSONANT, p::PAD, p::KEY] {
+        for i in [p::LYRICS, p::SPEAK, p::CONSONANT, p::PAD, p::KEY, p::START_SYL, p::SPEECH, p::START_LINE] {
             self.applied[i] = kept[i];
         }
     }
@@ -1158,6 +1163,13 @@ impl ChimeraMpc {
         self.engine.render(out);
         self.show_beat_hits();
         if self.mode == MODE_BEATBOX && self.params[p::MIC] >= 0.5 {
+            // a non-finite sample would stay in the close mic's filter and compressor state for
+            // good: it never gets that far
+            for x in out.iter_mut() {
+                if !x.is_finite() {
+                    *x = 0.0;
+                }
+            }
             self.close_mic.process(out);
         }
         let mut energy = 0.0f64;
@@ -1468,6 +1480,8 @@ pub extern "C" fn cm_settle(h: *mut ChimeraMpc) {
         for i in [p::SPEAK, p::CONSONANT, p::PAD, p::KEY] {
             e.applied[i] = e.params[i];
         }
+        // a load may have brought other typed texts: the WORDS preview is worked out again
+        e.preview_dirty = true;
     });
 }
 

@@ -500,7 +500,8 @@ private:
     {
         float seen[kNumParams];
         for (int i = 0; i < kNumParams; ++i) seen[i] = get(i);
-        int lastTyped = -1, knobLooks = 0, idleLooks = 0;
+        // idle until the first block: nothing goes to the host while it is still opening the plugin
+        int lastTyped = -1, knobLooks = 0, idleLooks = 4;
         // the face's strips: the soft palate, then cm_face's layers
         constexpr int kStrips = 1 + kFaceLayers;
         int lastShown[kStrips], again[kStrips] = {};
@@ -530,7 +531,7 @@ private:
             for (int i = 0; i < kNumParams; ++i)
             {
                 // displays and the keyboard's taps are not knob sweeps
-                if (isDisplay(i) || i == kKey) continue;
+                if (isDisplay(i) || isTap(i)) continue;
                 const float x = get(i);
                 if (x != seen[i]) { moved = true; seen[i] = x; }
             }
@@ -595,7 +596,7 @@ private:
                 setNormalised(kTyped, (float)typed / 1023.0f);
                 notifyHostParameterChanged(kTyped);
             }
-            // a drum hit lights its pad for a moment (reported even while knobs move: hits are taps)
+            // a drum hit lights its pad for a moment
             const int hits = hitCount_.load(std::memory_order_acquire);
             int lit = shownHit < 0 ? 0 : shownHit;
             // after a load or reset: the pads and squares go dark, whatever the project saved
@@ -641,7 +642,9 @@ private:
             }
             else if (hitLooks > 0 && --hitLooks == 0)
                 lit = 0;
-            if (lit != shownHit)
+            // (held while a setting moves: the beat's hits come several times a second, which during a
+            // knob sweep can lock up the MPC's Q-Link screen)
+            if (lit != shownHit && knobLooks == 0)
             {
                 shownHit = lit;
                 set(kHit, (float)lit);

@@ -283,6 +283,11 @@ fn run(hub: &Hub, fs: f64, content: Option<&str>, texts: &Texts) {
                     o.speech = Some(s);
                 }
             }
+            // no Blend wanted: the one built is gone (the audio thread trashes it when a preset
+            // takes over), so the same mix asked for again is built again
+            if r.blend.is_none() {
+                built_blend = None;
+            }
             if let Some(mix) = r.blend
                 && built_blend != Some(mix)
             {
