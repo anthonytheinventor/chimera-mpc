@@ -745,3 +745,40 @@ fn the_pads_play_the_beatbox_squares_and_light_them() {
     }
     assert!(seen.len() >= 8, "the beat lit only {seen:?}");
 }
+
+/// Power at `hz` (Goertzel over the whole signal, Hann window).
+fn tone_power(x: &[f32], hz: f64) -> f64 {
+    let n = x.len();
+    let w = 2.0 * std::f64::consts::PI * hz / FS;
+    let c = 2.0 * w.cos();
+    let (mut s1, mut s2) = (0.0f64, 0.0f64);
+    for (i, &v) in x.iter().enumerate() {
+        let win = 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n as f64).cos();
+        let s = v as f64 * win + c * s1 - s2;
+        s2 = s1;
+        s1 = s;
+    }
+    s1 * s1 + s2 * s2 - c * s1 * s2
+}
+
+#[test]
+fn consonants_have_no_tone_at_a_quarter_of_the_rate() {
+    // geometry every 4 samples at 1x made an 11 kHz line at consonants; the voice notches it
+    let mut r = Rig::new();
+    r.set(p::MODE, 2.0);
+    r.wait_for_lyrics();
+    r.render(0.5);
+    r.out.clear();
+    for _ in 0..3 {
+        cm_note_on(r.h, 60, 100);
+        r.render(0.05);
+        cm_note_off(r.h, 60);
+        r.render(1.4);
+    }
+    let line = tone_power(&r.out, FS / 4.0);
+    // the neighbourhood: a few frequencies around 9.5 kHz, where the voice has its own noise
+    let around = [9300.0, 9500.0, 9700.0].iter().map(|&f| tone_power(&r.out, f)).sum::<f64>() / 3.0;
+    let db = 10.0 * (line / around.max(1e-30)).log10();
+    eprintln!("11025 Hz vs 9.5 kHz: {db:.1} dB");
+    assert!(db < -20.0, "a tone at fs/4: {db:.1} dB against its neighbourhood");
+}

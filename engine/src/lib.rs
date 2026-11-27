@@ -157,6 +157,12 @@ pub(crate) fn mpc_voice(fs: f64, body: BodyMix) -> Box<HumanVoice> {
     v.set_contact_reapply(false);
     v.airway.net.approx = APPROX_WALLS | APPROX_KINETIC;
     v.set_fast_airway(true);
+    // geometry every 4 samples at 1x steps the airway's coefficients at fs/4, which the jet's flow
+    // turns into an 11 kHz tone at consonant onsets, releases and closures (a "chirp"): a narrow
+    // notch there takes it out (as clean as geometry every sample, about 0.5 % more CPU)
+    if os == 1 {
+        v.set_output_filters(fs / 4.0, 1500.0, 0.0, 0);
+    }
     v.set_source(&SourcePatch::f0(default_f0(body)));
     // a voice's first control step sizes some of its buffers: do it here, not on the audio thread
     v.render(&mut [0.0; 128]);
