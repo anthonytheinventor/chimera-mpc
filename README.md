@@ -74,6 +74,9 @@ Each note sings the next syllable of the lyrics, as CHIMERA's Sing mode does.
 - **Lyrics** picks one of eight lines from `Content/lyrics.txt` in the plugin folder. Edit that file on
   the drive to sing your own words, or type them on the WORDS page.
 - **Start Syl** sets where the lyrics start.
+- On the SING page, in front of the face, **NOW** shows the syllable just sung and **NEXT** the one
+  the next note sings. A vowel carried on to the next note (a `-` or `~` between spaces in the lyrics)
+  reads as its syllable with a `~`.
 - With **Restart** on, Sing and Speak start again from Start Syl and Start Line each time the MPC's
   transport starts.
 - The first moment after loading, while the pronunciation dictionary loads, a note sings "ah".
@@ -109,6 +112,8 @@ Each note says the next line of the chosen text.
 - **Speech** picks one of eight blocks of lines in `Content/speech.txt` (blocks are separated by a blank
   line). **Start Line** sets where it starts and **Speech Rate** how fast it talks.
 - C3 speaks at the body's natural pitch. Other keys move the whole line up or down, up to two octaves.
+- On the SPEAK page, under the chin, **NOW** shows the line just said and **NEXT** the line the next
+  note says. A line longer than the screen's 31 characters ends in "…".
 - With **IPA** on, the text is read as IPA.
 - **Speak** says the next line without a key.
 - On the SOUNDS page, **Consonant** says one consonant between two vowels, as CHIMERA's consonant chart
@@ -124,8 +129,8 @@ Each note says the next line of the chosen text.
 
 A 16-step pattern of beatbox sounds, every one of them made by the mouth.
 
-- **Beat** picks one of CHIMERA's seven patterns (it fills the steps, Tempo and Swing) or keeps
-  **Your Beat**.
+- **Beat** picks one of CHIMERA's seven patterns (it fills the steps, their hum notes and accents,
+  Tempo and Swing) or keeps **Your Beat**.
 - **Play Beat** runs it on its own tempo. With **Follow Host** on, it plays along with the MPC's
   sequencer while that runs.
 - The MPC's pads 1-16 each play the sound in the BEATBOX square with the same number, and the square
@@ -141,6 +146,22 @@ A 16-step pattern of beatbox sounds, every one of them made by the mouth.
 - Other keys below C3 hit drum sounds (General MIDI's drum map), and keys from C3 up hum two octaves
   lower; the pads' 16 notes play their squares first. **Pad** hits a sound without a key.
 - **Mic FX** is CHIMERA's close-mic sound.
+
+<p align="center">
+  <img src="docs/images/notes.png" alt="NOTES page: each square's hum note and Accent button, with the Hum Bass pattern" width="860">
+</p>
+
+On the NOTES page (press BEATBOX a third time), each square has a hum note and an accent. The squares
+are laid out as on BEATBOX, and Q-Link n turns square n's **Note**.
+
+- **Note** is the pitch the square hums at when its sound is `m`, named as the MPC names notes (60 is
+  C3, 36 is C1), from 24 (C0) to 60 (C3). `-` hums at the hum's own note, 40 (E1). The note shows in
+  amber on the squares that hum.
+- **Accent** hits the square's sound 1.3 times as hard, as CHIMERA's `>` does. On a pad, it multiplies
+  the pad's velocity.
+- The beat and the pads both play the notes and accents. **Hum Bass** fills in its bass line (G1 on
+  square 4, A1 on 7, E1 on 10); the other patterns put every note back to `-` and every accent off.
+  Changing a square's sound keeps its note and accent.
 
 | | | | | | | | | | | |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -193,8 +214,10 @@ profile.
   it is silent.
 - Each column of four Q-Links is one of CHIMERA's pages of four, colored green, red, pink and white from
   top to bottom, matching the column of four in the Q-Link window.
-- Under the chin, the Jaw, Lips and Velum readouts follow their knobs. Velum says Shut while the soft
-  palate closes off the nose.
+- On PLAY, under the chin, the Jaw, Lips and Velum readouts follow their knobs. Velum says Shut while
+  the soft palate closes off the nose.
+- On SING and SPEAK, NOW and NEXT stand in front of the face: what was just sung or said, and what
+  the next note sings or says.
 - Buttons that are on are solid; off, they are an outline.
 - On KIT, the pad last heard lights up, whether you tapped it, played its drum key, or the beat played
   it.
@@ -204,13 +227,14 @@ profile.
 
 | Page | Columns | Right side |
 |---|---|---|
-| **SING** | **SONG** Vibrato · Vib Rate · Breathy · Ring<br>**VOICE** Breath · Pressed · Bright · Glide<br>**TONE** Rough · Fry · Twang · False Folds<br>**LYRICS** Lyrics · Start Syl · Restart · Gain | the vocal tract, moving as it sings |
+| **SING** | **SONG** Vibrato · Vib Rate · Breathy · Ring<br>**VOICE** Breath · Pressed · Bright · Glide<br>**TONE** Rough · Fry · Twang · False Folds<br>**LYRICS** Lyrics · Start Syl · Restart · Gain | the vocal tract, moving as it sings, with NOW and NEXT (the syllables) |
 | **PLAY** | **VOICE** Pitch · Breath · Pressed · Vibrato<br>**TONE** Bright · Breathy · Rough · Fry<br>**MOUTH** Rounding · Lips Open · Protrude · Jaw<br>**THROAT** Soft Palate · Larynx · Twang · False Folds | the vocal tract |
 | **VOWEL**<br><sub>press PLAY again</sub> | **VOWEL** Front · Open · Soft Palate · Rounding<br>**TONGUE** Tongue Fwd · Tongue Up · Tip Fwd · Tip Up<br>**MORE** Tongue Root · Tip Curl · Glide · Vib Rate<br>**VOICE** Pitch · Breath · Pressed · Bright | the vowel chart: drag to set Front and Open |
-| **SPEAK** | **SPEAK** Speech Rate · Start Line · Speech · IPA<br>**VOICE** Breath · Pressed · Bright · Glide<br>**TONE** Breathy · Rough · Fry · Ring<br>**SHAPE** Jaw · Lips Open · Larynx · Soft Palate | the vocal tract |
+| **SPEAK** | **SPEAK** Speech Rate · Start Line · Speech · IPA<br>**VOICE** Breath · Pressed · Bright · Glide<br>**TONE** Breathy · Rough · Fry · Ring<br>**SHAPE** Jaw · Lips Open · Larynx · Soft Palate | the vocal tract, with NOW and NEXT (the lines) |
 | **SOUNDS**<br><sub>press SPEAK again</sub> | as SPEAK | the consonant buttons (tap one to say it) and the vowel around it |
 | **BEATBOX** | the 16 steps, laid out as the MPC's pads | the vocal tract, the beat's name and tempo, the last note, Pad 1 Note and LEARN PAD 1 |
 | **KIT**<br><sub>press BEATBOX again</sub> | **BEAT** Beat · Tempo · Swing · Mic FX<br>**HUM VOICE** Breath · Pressed · Bright · Glide<br>**TRANSPORT** Follow Host · Play Beat · Gain · Pad 1 Note | the ten pads |
+| **NOTES**<br><sub>press BEATBOX a third time</sub> | each square's Note and an Accent button, laid out as the MPC's pads | the vocal tract, the beat's name and tempo |
 | **WORDS**<br><sub>function key 5</sub> | one row: Type Into · Type Slot · Speech Rate · Start Line | the text being typed, with a full-width keyboard below |
 | **BODY**<br><sub>function key 6</sub> | **BODY** Body · Female · Child · Gain<br>**SETUP** MPE · Restart · Whisper · Breathe | the vocal tract and the credit; the body chips are in the top bar |
 
@@ -272,7 +296,8 @@ with the other tracks.
 | **Whisper** | Turns the voicing off. |
 | **Ring**, **Twang** | Both narrow the tube just above the vocal folds; the larger of the two is used. |
 | **Tip Fwd**, **Tip Up** | Place the tongue tip; at their starting values it rests where the jaw and tongue body put it. |
-| A step's **m** (hum) | Plays at a fixed pitch; the Hum Bass pattern's own hum notes are not kept. |
+| A step's **Note** | The pitch of its hum (`m`); other sounds have no pitch to set. |
+| A step's **Accent** | Stands out most with **Mic FX** off: the close mic's compressor evens the hits out. |
 
 ## Install
 

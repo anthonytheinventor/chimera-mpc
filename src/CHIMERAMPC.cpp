@@ -21,7 +21,11 @@
 //         drum sounds (General MIDI's drum map), notes from C3 up hum two octaves down. The
 //         MPC's pads 1-16 play the BEATBOX squares: Pad 1 Note says which notes they send (a
 //         chromatic run from it, the classic MPC map, or Learn: the next note is pad 1's), and
-//         Last Note shows the note last played, so one tap shows what a pad sends.
+//         Last Note shows the note last played, so one tap shows what a pad sends. Each square
+//         has a hum note (Note n: "-" is the hum's own, E1) and an Accent (1.3x), on the NOTES
+//         page; picking a Beat fills them as it fills the steps.
+// The screen shows what comes next: in Sing the syllable last sung (Now) and the one the next note
+// sings (Next), in Speak the line last said and the next one (the engine's cm_now_next).
 // Body: Male, Female, Child, or Blend (the engine's thread builds a voice for the mix; the
 // previous body plays until it is ready). Restart: Sing and Speak start over at Start Syl and
 // Start Line when the transport starts.
@@ -126,14 +130,25 @@ enum ParamIndex
     kTyped2,                   // read-only: the text box's second row (Typed is the first; formatValue)
     kPadNotes,                 // Beatbox: pad 1's note (0..112, a chromatic run from it), Classic (the classic MPC map) or Learn
     kLastNote,                 // read-only: the last note played (0 none, then 1 + the note), on the BEATBOX page
+    kNow,                      // read-only: Sing's syllable last sung / Speak's line last said (formatValue)
+    kNext,                     // read-only: the syllable / line the next note sings or says (formatValue)
+    kStepNote1,                // Beatbox: each square's hum note ("-" the hum's own, then kNoteLow..kNoteHigh)
+    kStepNote16 = kStepNote1 + 15,
+    kStepAccent1,              // Beatbox: each square's accent (off / on: STEP_ACCENT, 1.3)
+    kStepAccent16 = kStepAccent1 + 15,
     kNumParams
 };
 
 constexpr int kEngineParams = kPadNotes + 1;   // the engine reads 0..kPadNotes (engine/src/lib.rs, module p; it ignores the displays)
 constexpr int kPadBaseMax = 112;   // Pad 1 Note's choices: 0..112 a note, then Classic, then Learn (engine PAD_BASE_MAX..)
 constexpr int kPadLearn = kPadBaseMax + 2;
+constexpr int kNoteLow = 24, kNoteHigh = 60;   // the steps' hum notes: C0..C3 as the MPC names them
 
-bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit || (i >= kVisJaw && i <= kVisSound) || i == kStepLit || i == kTyped2 || i == kLastNote; }
+bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit || (i >= kVisJaw && i <= kVisSound) || i == kStepLit || i == kTyped2 || i == kLastNote || i == kNow || i == kNext; }
+
+// A step's hum note: the Note choice (0 "-", then kNoteLow..) <-> the engine's MIDI note (0: the hum's own)
+float stepNoteMidi(int choice) { return choice <= 0 ? 0.0f : (float)(kNoteLow + choice - 1); }
+int stepNoteChoice(float midi) { return midi < 1.0f ? 0 : 1 + std::min(std::max((int)std::lround(midi), kNoteLow), kNoteHigh) - kNoteLow; }
 
 // A note as the MPC names it (C-2 is note 0, C3 note 60): "61 C#3".
 std::string noteName(int n)
@@ -296,6 +311,29 @@ public:
         mpc::Param last = mpc::choiceParam("last_note", "Last Note", lastNote, 0);
         last.automatable = false;
         addParam(last);
+        // what comes next on the SING and SPEAK pages: the text is formatValue's (the helper
+        // thread moves the values so the host reads it again)
+        mpc::Param now = mpc::intParam("now", "Now", 0, 1023, 0);
+        mpc::Param next = mpc::intParam("next", "Next", 0, 1023, 0);
+        now.automatable = false;
+        next.automatable = false;
+        addParam(now);
+        addParam(next);
+        // each square's hum note and accent (the NOTES page)
+        std::vector<std::string> stepNotes = {"-"};
+        for (int n = kNoteLow; n <= kNoteHigh; ++n) stepNotes.push_back(noteName(n));
+        for (int i = 0; i < 16; ++i)
+        {
+            const std::string id = "step_note_" + std::string(i < 9 ? "0" : "") + std::to_string(i + 1);
+            const std::string name = "Note " + std::to_string(i + 1);
+            addParam(mpc::choiceParam(id.c_str(), name.c_str(), stepNotes, 0));
+        }
+        for (int i = 0; i < 16; ++i)
+        {
+            const std::string id = "step_accent_" + std::string(i < 9 ? "0" : "") + std::to_string(i + 1);
+            const std::string name = "Accent " + std::to_string(i + 1);
+            addParam(mpc::boolParam(id.c_str(), name.c_str(), false));
+        }
         texts_ = cm_texts_new();
 
         // Built-in programs: voices only. Each sets parameters 0-13 (Gain, the voice source, the
@@ -349,15 +387,26 @@ public:
         tapQueue_[w % kTapQueue].compare_exchange_strong(empty, (int32_t)((index << 8) | step), std::memory_order_release);
     }
 
-    // The text box's two rows (the slot around its cursor), as Typed's and Typed 2's text (the host's thread).
+    // The text box's two rows (the slot around its cursor), as Typed's and Typed 2's text, and the
+    // screen's Now and Next (the host's thread).
     bool formatValue(int index, float plainValue, std::string& out) override
     {
         (void)plainValue;
+        if (index == kNow || index == kNext)
+        {
+            // "NOW\nNEXT", each within the framework's 31 characters (the engine keeps them so)
+            char buf[kTextBuf];
+            readText(nowNextBuf_, nowNextSeq_, buf, sizeof buf);
+            const char* nl = std::strchr(buf, '\n');
+            if (index == kNow) out.assign(buf, nl ? (size_t)(nl - buf) : std::strlen(buf));
+            else out = nl ? nl + 1 : "";
+            return true;
+        }
         if (index != kTyped && index != kTyped2) return false;
         // the preview is two rows with a line break between them: Typed shows the first, Typed 2
         // the second (each within the framework's 31 characters)
         char buf[64];
-        readPreview(buf, sizeof buf);
+        readText(previewBuf_, previewSeq_, buf, sizeof buf);
         const char* nl = std::strchr(buf, '\n');
         if (index == kTyped) out.assign(buf, nl ? (size_t)(nl - buf) : std::strlen(buf));
         else out = nl ? nl + 1 : "";
@@ -425,6 +474,14 @@ public:
         followVowelPad(e);
         followBeatPreset();
         followSlots();
+        // the squares' hum notes and accents (the engine applies them when they change)
+        float stepNotes[16], stepAccents[16];
+        for (int i = 0; i < 16; ++i)
+        {
+            stepNotes[i] = stepNoteMidi(getInt(kStepNote1 + i));
+            stepAccents[i] = get(kStepAccent1 + i) >= 0.5f ? 1.0f : 0.0f;
+        }
+        cm_step_notes(e, stepNotes, stepAccents);
         const mpc::Transport& t = ctx.transport;
         cm_transport(e, t.playing ? 1 : 0, t.tempoValid ? 1 : 0, t.bpm, t.ppqValid ? 1 : 0, t.ppqPos, ctx.numFrames);
 
@@ -481,7 +538,14 @@ public:
         if (serial != previewSerialSeen_)
         {
             previewSerialSeen_ = serial;
-            writePreview(preview);
+            writeText(previewBuf_, previewSeq_, previewWrites_, preview);
+        }
+        char nowNext[kTextBuf];
+        const uint32_t nowNextSerial = cm_now_next(e, (uint8_t*)nowNext, sizeof nowNext);
+        if (nowNextSerial != nowNextSerialSeen_)
+        {
+            nowNextSerialSeen_ = nowNextSerial;
+            writeText(nowNextBuf_, nowNextSeq_, nowNextWrites_, nowNext);
         }
         int shown[4] = {0, 0, 0, 0};
         cm_display(e, shown);
@@ -509,37 +573,41 @@ public:
     }
 
 private:
-    // The preview text crosses from the audio thread to the host's: a sequence lock (the writer
-    // never waits; a reader that catches a write in progress reads again).
-    void writePreview(const char* text)
+    // A text (the WORDS preview, Now / Next) crosses from the audio thread to the host's: a
+    // sequence lock (the writer never waits; a reader that catches a write in progress reads
+    // again). `writes` counts the writes, for the helper thread to see a new text.
+    static constexpr size_t kTextBuf = 64;
+    using TextBuf = std::atomic<char>[kTextBuf];
+
+    static void writeText(TextBuf& buf, std::atomic<uint32_t>& seq, std::atomic<uint32_t>& writes, const char* text)
     {
-        previewSeq_.fetch_add(1, std::memory_order_acq_rel);   // odd: writing
+        seq.fetch_add(1, std::memory_order_acq_rel);   // odd: writing
         std::atomic_thread_fence(std::memory_order_release);
-        for (size_t i = 0; i < sizeof previewBuf_; ++i)
+        for (size_t i = 0; i < kTextBuf; ++i)
         {
-            previewBuf_[i].store(text[i], std::memory_order_relaxed);
+            buf[i].store(text[i], std::memory_order_relaxed);
             if (text[i] == 0) break;
         }
         std::atomic_thread_fence(std::memory_order_release);
-        previewSeq_.fetch_add(1, std::memory_order_release);   // even: done
-        previewWrites_.fetch_add(1, std::memory_order_relaxed);
+        seq.fetch_add(1, std::memory_order_release);   // even: done
+        writes.fetch_add(1, std::memory_order_relaxed);
     }
 
-    void readPreview(char* out, size_t cap)
+    static void readText(const TextBuf& buf, const std::atomic<uint32_t>& seq, char* out, size_t cap)
     {
         for (int tries = 0; tries < 100; ++tries)
         {
-            const uint32_t a = previewSeq_.load(std::memory_order_acquire);
+            const uint32_t a = seq.load(std::memory_order_acquire);
             if (a & 1u) { std::this_thread::yield(); continue; }
             size_t i = 0;
-            for (; i + 1 < cap && i < sizeof previewBuf_; ++i)
+            for (; i + 1 < cap && i < kTextBuf; ++i)
             {
-                out[i] = previewBuf_[i].load(std::memory_order_relaxed);
+                out[i] = buf[i].load(std::memory_order_relaxed);
                 if (out[i] == 0) break;
             }
             out[i < cap ? i : cap - 1] = 0;
             std::atomic_thread_fence(std::memory_order_acquire);
-            if (previewSeq_.load(std::memory_order_relaxed) == a) return;
+            if (seq.load(std::memory_order_relaxed) == a) return;
         }
         out[0] = 0;
     }
@@ -563,6 +631,7 @@ private:
         int lastHitCount = hitCount_.load(std::memory_order_acquire), shownHit = -1, hitLooks = 0;
         int lastStepCount = stepCount_.load(std::memory_order_acquire), shownStep = -1, stepLooks = 0;
         int shownNote = -1;
+        int lastNowNext = -1;
         uint32_t lastProcessed = 0;
         for (;;)
         {
@@ -652,6 +721,19 @@ private:
                 notifyHostParameterChanged(kTyped);
                 setNormalised(kTyped2, (float)typed / 1023.0f);
                 notifyHostParameterChanged(kTyped2);
+            }
+            // Now and Next (what comes next on SING and SPEAK): their values move so the host reads
+            // the new texts; held back while a setting moves (notes would otherwise report several
+            // times a second during a knob sweep, which can lock up the MPC's Q-Link screen), and
+            // shown once it rests
+            const int nowNext = (int)(nowNextWrites_.load(std::memory_order_relaxed) % 1024u);
+            if (nowNext != lastNowNext && knobLooks == 0)
+            {
+                lastNowNext = nowNext;
+                setNormalised(kNow, (float)nowNext / 1023.0f);
+                notifyHostParameterChanged(kNow);
+                setNormalised(kNext, (float)nowNext / 1023.0f);
+                notifyHostParameterChanged(kNext);
             }
             // Learn's result, at once (it is not a knob sweep)
             if (padLearned_.exchange(false, std::memory_order_acq_rel)) notifyHostParameterChanged(kPadNotes);
@@ -785,8 +867,9 @@ private:
         for (int k = 0; k < 9; ++k) padArtic_[k] = get(kPadParams[k]);
     }
 
-    // A beat preset was picked: its steps, tempo and swing go into their parameters (as the vowel
-    // pad's posture does). Picking Your Beat, or editing a step, changes nothing else.
+    // A beat preset was picked: its steps, hum notes, accents, tempo and swing go into their
+    // parameters (as the vowel pad's posture does). Picking Your Beat, or editing a step, changes
+    // nothing else.
     void followBeatPreset()
     {
         const int beat = getInt(kBeat);
@@ -797,6 +880,14 @@ private:
         for (int i = 0; i < 16; ++i) set(kStep1 + i, steps[i]);
         set(kTempo, bpm);
         set(kSwing, swing * 100.0f);
+        // its hum notes and accents too (a preset without them puts them back to "-" and off)
+        float notes[16] = {}, accents[16] = {};
+        cm_beat_preset_notes(beat, notes, accents);
+        for (int i = 0; i < 16; ++i)
+        {
+            set(kStepNote1 + i, (float)stepNoteChoice(notes[i]));
+            set(kStepAccent1 + i, accents[i] >= 0.5f ? 1.0f : 0.0f);
+        }
     }
 
     // The WORDS page's Type Slot and the slot that plays (Speech, or Lyrics while typing lyrics)
@@ -845,9 +936,12 @@ private:
     int faceFrames_[kFaceLayers] = {10, 28, 18, 12, 7, 6};   // cm_face_frames
     int stripTurn_ = 0;                                 // the helper thread's
     const void* texts_ = nullptr;
-    std::atomic<char> previewBuf_[64] = {};
+    TextBuf previewBuf_ = {};
     std::atomic<uint32_t> previewSeq_{0}, previewWrites_{0};
     uint32_t previewSerialSeen_ = 0;
+    TextBuf nowNextBuf_ = {};
+    std::atomic<uint32_t> nowNextSeq_{0}, nowNextWrites_{0};
+    uint32_t nowNextSerialSeen_ = 0;   // the audio thread's
     std::atomic<uint32_t> processed_{0};
     std::thread notifier_;
     std::atomic<bool> quit_{false};

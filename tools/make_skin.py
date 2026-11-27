@@ -144,7 +144,8 @@ def dim(c, o):
 SPEAK_GROUPS = [("SPEAK", ["Speech Rate", "Start Line", "Speech", "IPA"]), ("VOICE", ["Breath", "Pressed", "Bright", "Glide"]),
                 ("TONE", ["Breathy", "Rough", "Fry", "Ring"]), ("SHAPE", ["Jaw", "Lips Open", "Larynx", "Soft Palate"])]
 PAGES = [
-    {"name": "SING", "fn": 0, "sub": 0, "right": "face", "sub_word": "SINGING", "readouts": True,
+    {"name": "SING", "fn": 0, "sub": 0, "right": "face", "sub_word": "SINGING", "now_next": "sing",
+     "preview_text": {"Now": "lo", "Next": "there"},
      "groups": [("SONG", ["Vibrato", "Vib Rate", "Breathy", "Ring"]), ("VOICE", ["Breath", "Pressed", "Bright", "Glide"]),
                 ("TONE", ["Rough", "Fry", "Twang", "False Folds"]), ("LYRICS", ["Lyrics", "Start Syl", "Restart", "Gain"])]},
     {"name": "PLAY", "fn": 1, "sub": 0, "right": "face", "sub_word": "MIDSAGITTAL", "readouts": True,
@@ -155,7 +156,8 @@ PAGES = [
      "chips": [("WHISPER", "Whisper", 116)], "main": ("BREATHE", "Breathe"),
      "groups": [("VOWEL", ["Front", "Open", "Soft Palate", "Rounding"]), ("TONGUE", ["Tongue Fwd", "Tongue Up", "Tip Fwd", "Tip Up"]),
                 ("MORE", ["Tongue Root", "Tip Curl", "Glide", "Vib Rate"]), ("VOICE", ["Pitch", "Breath", "Pressed", "Bright"])]},
-    {"name": "SPEAK", "fn": 2, "sub": 0, "right": "face", "sub_word": "SPEAKING", "readouts": True,
+    {"name": "SPEAK", "fn": 2, "sub": 0, "right": "face", "sub_word": "SPEAKING", "now_next": "speak",
+     "preview": {"Mode": 2}, "preview_text": {"Now": "I am a voice made of air.", "Next": "Every sound comes from a sim\u2026"},
      "chips": [("IPA", "IPA", 80)], "main": ("SPEAK", "Speak"), "groups": SPEAK_GROUPS},
     {"name": "SOUNDS", "fn": 2, "sub": 1, "right": "sounds",
      "chips": [("IPA", "IPA", 80)], "main": ("SPEAK", "Speak"), "groups": SPEAK_GROUPS},
@@ -165,6 +167,8 @@ PAGES = [
      "chips": [("MIC FX", "Mic FX", 96), ("FOLLOW", "Follow Host", 104)], "main": ("PLAY BEAT", "Play Beat"),
      "groups": [("BEAT", ["Beat", "Tempo", "Swing", "Mic FX"]), ("HUM VOICE", ["Breath", "Pressed", "Bright", "Glide"]),
                 ("TRANSPORT", ["Follow Host", "Play Beat", "Gain", "Pad 1 Note"]), ("", [None, None, None, None])]},
+    {"name": "NOTES", "fn": 3, "sub": 2, "right": "face", "sub_word": "HUM NOTES", "left": "notes", "preview": "hum bass",
+     "chips": [("MIC FX", "Mic FX", 96), ("FOLLOW", "Follow Host", 104)], "main": ("PLAY BEAT", "Play Beat")},
     {"name": "WORDS", "fn": 4, "sub": 0, "left": "words", "main": ("SPEAK", "Speak"), "caption": "SAYS THE NEXT LINE"},
     {"name": "BODY", "fn": 5, "sub": 0, "right": "face", "sub_word": "MIDSAGITTAL", "credit": True, "body_chips": True,
      "groups": [("BODY", ["Body", "Female", "Child", "Gain"]), ("SETUP", ["MPE", "Restart", "Whisper", "Breathe"]),
@@ -179,6 +183,7 @@ BODIES = ["MALE", "FEMALE", "CHILD", "BLEND"]
 BODY_CAPTIONS = ["ADULT MALE", "ADULT FEMALE", "CHILD", "BLEND"]
 UNITS = {"ct": "CENTS", "cmH2O": "CMH2O", "dB": "DB", "x": "X"}
 UNIT_OVERRIDE = {"Lyrics": "SLOT", "Speech": "SLOT", "Type Slot": "SLOT", "Start Syl": "SYLLABLE", "Start Line": "LINE"}
+PAD_SOUNDS = ["B", "t", "Pf", "K", "^K", "!", "P!", "tss", "kch", "m"]   # the Step choices after "."
 PADS = [("KICK", "B"), ("HAT", "t"), ("SNARE", "Pf"), ("RIM", "K"), ("INWARD", "^K"),
         ("CLICK", "!"), ("POP", "P!"), ("OPEN HAT", "tss"), ("CRASH", "kch"), ("HUM", "m")]
 CONSONANTS = ["p", "b", "t", "d", "k", "g", "ʔ", "m", "n", "ŋ", "r", "ɾ", "f", "v", "θ", "ð",
@@ -197,7 +202,14 @@ KEY_W, KEY_H, KEY_PITCH_X, KEY_PITCH_Y, KEYS_X, KEYS_Y = 118, 100, 126, 108, 14,
 WIDE_KEYS = [("CLEAR", 35, 14, 180, RED), ("!", 31, 202, 118, None), ("SPACE", 27, 328, 562, LABEL),
              ("LINE /", 34, 898, 180, GREEN), ("DEL", 33, 1086, 180, WHITE)]
 # previews only: what the live text labels show when their parameter's default text is empty
-PREVIEW_SAMPLE = {"Typed": "hello. can you hear me? i can", "Typed 2": "hear you just fine, thanks|"}
+PREVIEW_SAMPLE = {"Typed": "hello. can you hear me? i can", "Typed 2": "hear you just fine, thanks|", "Now": "lo", "Next": "there"}
+# the NOTES page's preview: Beat at Hum Bass, its steps and hum notes (CHIMERA's "Hum bass" preset,
+# B m . m:43 | Pf . m:45 . | B m:40 . m | Pf . t kch)
+HUM_BASS = (6, ["B", "m", ".", "m", "Pf", ".", "m", ".", "B", "m", ".", "m", "Pf", ".", "t", "kch"],
+            [0, 0, 0, 43, 0, 0, 45, 0, 0, 40, 0, 0, 0, 0, 0, 0])
+# the steps' hum notes (src/CHIMERAMPC.cpp: kNoteLow..kNoteHigh after "-"), and the Step choice that hums
+NOTE_LOW = 24
+HUM_STEP = 10
 
 
 # --------------------------------------------------------------------------------------------
@@ -1147,11 +1159,18 @@ def face_screen(b, ch, page, face):
         cx, just = (SX + 16, "l") if FACE_LEFT else (SX + SW - 16, "r")
         b.cap(ch, cx, TOP + 470, "VOICE: CHIMERA", 12, QUIET, just, 0.1)
         b.cap(ch, cx, TOP + 490, "BY JAMESON HODGE (MIT)", 12, QUIET, just, 0.1)
-    if page.get("left") == "steps":
+    if page.get("now_next"):
+        now_next_block(b, ch, page["now_next"])
+    if page.get("left") in ("steps", "notes"):
         # the beat's name and tempo at the top right (the hit symbol and step need new parameters: step 2)
         b.label(ch, params["Beat"], (SX + SW - 300, TOP + 38, 284, 30), 22.0, AMBER, "right verticallyCentred", "Regular")
         b.label(ch, params["Tempo"], (SX + SW - 160, TOP + 70, 100, 26), 20.0, LABEL, "right verticallyCentred", "Regular")
         b.cap(ch, SX + SW - 54, TOP + 77, "BPM", 12, AMBER, "l", 0.1, 0.8)
+    if page.get("left") == "notes":
+        # how the squares' notes work, in front of the neck (the widest free place below the chin)
+        for k, line in enumerate(("Q-LINK N: SQUARE N'S HUM NOTE", "-: THE HUM'S OWN NOTE (40 E1)", "ACCENT: 1.3X, ANY SOUND")):
+            b.cap(ch, SX + 14, TOP + 508 + k * 20, line, 12, QUIET, "l", 0.1)
+    if page.get("left") == "steps":
         # the pads' notes: the note last played (one tap on a pad shows what it sends), Pad 1 Note,
         # and LEARN (lit while Pad 1 Note says Learn: the next note is pad 1's)
         b.cap(ch, SX + SW - 138, TOP + 112, "LAST NOTE", 12, QUIET, "r", 0.1)
@@ -1161,6 +1180,77 @@ def face_screen(b, ch, page, face):
         # (Pad 1 Note has more steps than host_sim lists as choices: its last one, Learn, by number)
         on, off = chip_files("LEARN PAD 1", 128, 34, px=13)
         b.button(ch, params["Pad 1 Note"], on, off, PAD_LEARN, PAD_LEARN + 1, SX + SW - 144, TOP + 168, name="learn pad 1")
+
+
+def now_next_block(b, ch, kind):
+    """SING / SPEAK: what comes next, in front of the face (left of the lips and jaw, below the
+    nose, where no frame of the moving layers reaches): NOW large, NEXT smaller, each a read-only
+    parameter's text (Now, Next). Shown only while Mode is that page's mode (the engine's texts
+    follow the mode). SING's are syllables (short, large); SPEAK's are whole lines (up to 31
+    characters), so they sit in the widest free band, under the chin."""
+    params = b.params
+    mode = b.ref(params["Mode"])
+    k = 0 if kind == "sing" else 2
+    n = len(mode.choices)
+    when = "IndexedEnabling/%d/%d/%s" % (k, n, mode.handle)
+    x = SX + 12
+    if kind == "sing":
+        now_cap, now_box, now_px = TOP + 388, (x, TOP + 402, 222, 64), 48.0
+        next_cap, next_box, next_px = TOP + 482, (x, TOP + 496, 324, 48), 32.0
+    else:
+        now_cap, now_box, now_px = TOP + 472, (x, TOP + 490, 324, 32), 22.0
+        next_cap, next_box, next_px = TOP + 526, (x, TOP + 540, 324, 26), 18.0
+    for text, y in (("NOW", now_cap), ("NEXT", next_cap)):
+        f, dx, dy, _ = caption(text, 12, QUIET, 0.12)
+        img = IMAGES[f]
+        ch.append(image_entry("cap " + text, f, (x + 2 + dx, y + dy, img.width, img.height), when=(k, n, mode.handle)))
+    b.label(ch, params["Now"], now_box, now_px, INK, "left verticallyCentred", "Regular", invalidating=[when])
+    b.label(ch, params["Next"], next_box, next_px, LABEL, "left verticallyCentred", "Light", invalidating=[when])
+
+
+def accent_files():
+    """NOTES: a square's Accent toggle (on = solid amber, off = amber outline)"""
+    names = []
+    for on in (True, False):
+        img = solid_button(132, 30, AMBER, "ACCENT", 13, track=0.14) if on else outline_button(132, 30, AMBER, "ACCENT", 13, track=0.14)
+        names.append(put("accent_%s.png" % ("on" if on else "off"), img))
+    return names
+
+
+def notes_block(b, ch):
+    """NOTES: each BEATBOX square's hum note and accent, the squares laid out as on BEATBOX (1-4 on
+    the bottom row, 13-16 on top) so Q-Link n turns square n's note (Bank Direction Column). The
+    sound in the square is shown at its top right; the note is amber while the square hums ("m")
+    and dim otherwise (it applies once the square is a hum). The Accent toggle sits under it."""
+    params = b.params
+    bounds, assigned = [], {}
+
+    def note_def():
+        return G.component_definition(G.control_actions("menu overlay"), [focus_entry(AMBER, 160, 98)], "00000000")
+    dn = b.need("chimNote", note_def)
+    lit_param = b.ref(params["Step Lit"])
+    step_lit_png()
+    on, off = accent_files()
+    for k in range(16):
+        c, r = k % 4, 3 - k // 4     # pad layout: square 1 bottom-left, 16 top-right
+        x, y = GRID_X + c * 166, TOP + r * 144
+        b.frame(ch, x, y, 160, 138, BLUE_DIM if c == 0 else FRAME)
+        ch.append(image_entry("lit %d" % (k + 1), "step_lit.png", (x, y, 160, 138), when=(k + 1, len(lit_param.choices), lit_param.handle)))
+        b.cap(ch, x + 10, y + 8, "%d" % (k + 1), 15, QUIET, "l", 0.1)
+        step = b.ref(params["Step %d" % (k + 1)])
+        ns = len(step.choices)
+        b.label(ch, step, (x + 60, y + 4, 92, 24), 18.0, QUIET, "right verticallyCentred", "Regular")
+        note = b.ref(params["Note %d" % (k + 1)])
+        # amber while the square hums, dim otherwise
+        b.label(ch, note, (x, y + 34, 160, 52), 34.0, AMBER, invalidating=["IndexedEnabling/%d/%d/%s" % (HUM_STEP, ns, step.handle)])
+        b.label(ch, note, (x, y + 34, 160, 52), 34.0, BLUE_MID, invalidating=["RangedEnabling/0/%d/%d/%s" % (HUM_STEP - 1, ns, step.handle)])
+        ch.append(G.entry(note.name, dn, G.obj(("version", 1), ("handleName", "Data")), rect_str(x, y, 160, 98),
+                          "Yes", "Hide", "Always", remap=[("Data", note.handle)]))
+        b.button(ch, params["Accent %d" % (k + 1)], on, off, 1, 1, x + 14, y + 100, name="accent %d" % (k + 1))
+        assigned[13 + c - 4 * r] = note.index
+    for c in range(4):
+        bounds.append(rect_str(GRID_X + c * 166 - 2, TOP - 2, 164, 4 * 144 + 2))
+    return bounds, assigned
 
 
 def vowel_screen(b, ch):
@@ -1221,6 +1311,14 @@ def pads_screen(b, ch):
     b.cap(ch, SX + 18, TOP + 538, "OTHER KEYS: GM DRUMS BELOW C3, HUMS FROM C3 UP", 12, QUIET, "l", 0.1)
 
 
+def step_lit_png():
+    """a lit square (BEATBOX, NOTES): amber, while Step Lit names it"""
+    if "step_lit.png" not in IMAGES:
+        im = Image.new("RGBA", (160, 138), AMBER + (70,))
+        ImageDraw.Draw(im).rectangle((0, 0, 159, 137), outline=core(AMBER) + (255,), width=2)
+        put("step_lit.png", im)
+
+
 def steps_block(b, ch):
     """BEATBOX: the 16 steps laid out as the MPC's pads (1-4 on the bottom row, 13-16 on top), so
     pad n plays square n and Q-Link n (Q-Links sit as the pads do) turns it; a square fills while
@@ -1234,10 +1332,7 @@ def steps_block(b, ch):
             G.entry("value", "Label", label_data("Value", argb(AMBER), 60.0), rect_str(0, 32, 160, 80), "No", "Show", "Always")], "00000000")
     dn = b.need("chimStep", step_def)
     lit_param = b.ref(params["Step Lit"])
-    if "step_lit.png" not in IMAGES:
-        im = Image.new("RGBA", (160, 138), AMBER + (70,))
-        ImageDraw.Draw(im).rectangle((0, 0, 159, 137), outline=core(AMBER) + (255,), width=2)
-        put("step_lit.png", im)
+    step_lit_png()
     assigned = {}
     for k in range(16):
         c, r = k % 4, 3 - k // 4     # pad layout: step 1 bottom-left, 16 top-right
@@ -1327,6 +1422,9 @@ def build_tui(params, units, face):
         if page.get("left") == "steps":
             bounds, assigned = steps_block(b, ch)
             direction = "Column"
+        elif page.get("left") == "notes":
+            bounds, assigned = notes_block(b, ch)
+            direction = "Column"
         elif page.get("left") == "words":
             bounds, assigned = words_block(b, ch)
             direction = "RowTopDown"
@@ -1384,6 +1482,28 @@ class Previewer:
         self.repl = {oget(e, "key"): oget(e, "value") for e in oget(pd, "replacementStrings")}
         self.tabs = oget(pd, "tabs")
         self.params = params_by_index
+        # a page's preview: some parameters off their defaults ({index: 0..1}) and sample texts
+        self.page_over = {}
+        self.page_text = {}
+
+    def for_page(self, page):
+        """the preview values and sample texts a page asks for (PAGES' "preview", "preview_text")"""
+        by_name = {p.name: p for p in self.params.values()}
+        over = {}
+        want = page.get("preview") or {}
+        if want == "hum bass":
+            beat, steps, notes = HUM_BASS
+            want = {"Beat": beat, "Mode": 3}
+            for i in range(16):
+                want["Step %d" % (i + 1)] = 0 if steps[i] == "." else 1 + PAD_SOUNDS.index(steps[i])
+                want["Note %d" % (i + 1)] = 0 if not notes[i] else 1 + notes[i] - NOTE_LOW
+            want["Accent 13"] = 1
+        for name, k in want.items():
+            p = by_name[name]
+            n = len(p.choices) if p.choices else 2
+            over[p.index] = k / float(n - 1)
+        self.page_over = over
+        self.page_text = page.get("preview_text") or {}
 
     def param(self, handle):
         if not handle or not handle.startswith(("Parameter ", "ResetOnGestureEnd/")):
@@ -1392,6 +1512,8 @@ class Previewer:
 
     def value(self, handle):
         p = self.param(handle)
+        if p and p.index in self.page_over:
+            return self.page_over[p.index]
         return (p.default or 0.0) if p else 0.0
 
     def steps(self, handle):
@@ -1409,7 +1531,7 @@ class Previewer:
         n = self.steps(handle)
         if base in self.repl and n:
             return self.repl[base][int(round(self.value(handle) * (n - 1)))]
-        return p.display or PREVIEW_SAMPLE.get(p.name, "")
+        return self.page_text.get(p.name) or p.display or PREVIEW_SAMPLE.get(p.name, "")
 
     def enabled(self, h):
         """IndexedEnabling/<choice>/<n>/<handle> and RangedEnabling/<min>/<max>/<n>/<handle> at the
@@ -1558,6 +1680,7 @@ def main():
     postures = posture_previews(face, placements)
     pv = Previewer(tui, {p.index: p for p in plist})
     for pi, (page, tab) in enumerate(zip(PAGES, pv.tabs)):
+        pv.for_page(page)
         pv.draw(tab).convert("RGB").save(os.path.join(PREVIEW, "page_%d_%s.png" % (pi + 1, page["name"].lower())))
 
     decoded = 0

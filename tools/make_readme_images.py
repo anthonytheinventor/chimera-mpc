@@ -11,11 +11,11 @@ Reads   build/params.json, build/face.json   (as make_skin.py does)
 Writes  docs/images/banner.png      the head and the wordmark
         docs/images/hero.gif        the SING page singing lyrics line 1, 20 pictures a second
         docs/images/face.png        the head's moving layers, named
-        docs/images/<page>.png      the other eight pages (play, vowel, speak, sounds, beatbox, kit, words, body)
+        docs/images/<page>.png      the other nine pages (play, vowel, speak, sounds, beatbox, kit, notes, words, body)
 
 The moving pictures are the engine's own: a small program (its source is at the end of this file)
 is built against engine/ in the temp folder, sings, speaks and plays a beat, and reads the face's
-frames (cm_face, cm_display, cm_step_lit) every 50 ms, as the plugin does. Set CARGO_TARGET_DIR to
+frames (cm_face, cm_display, cm_step_lit) and NOW / NEXT (cm_now_next) every 50 ms, as the plugin does. Set CARGO_TARGET_DIR to
 choose where it builds. With --no-engine (or when cargo fails) the hero cycles the check postures
 in build/face.json instead and the screens show the face at rest.
 """
@@ -82,14 +82,22 @@ def engine_frames(use_engine=True):
 # The skin in memory (as make_skin.main builds it, writing nothing)
 # --------------------------------------------------------------------------------------------
 class Live(M.Previewer):
-    """the skin's previewer with some parameters moved off their defaults: over = {name: 0..1}"""
+    """the skin's previewer with some parameters moved off their defaults: over = {name: 0..1},
+    and the texts of read-only text parameters: texts = {name: text}"""
     over = {}
+    texts = {}
 
     def value(self, handle):
         p = self.param(handle)
         if p and p.name in self.over:
             return self.over[p.name]
         return super().value(handle)
+
+    def text(self, handle):
+        p = self.param(handle)
+        if p and p.name in self.texts:
+            return self.texts[p.name]
+        return super().text(handle)
 
 
 class Skin:
@@ -123,9 +131,10 @@ class Skin:
         names = ["Jaw Pos", "Tongue Pos", "Lips Pos", "Lower Lip", "Larynx Pos", "Sound Lvl", "Velum Pos"]
         return {n: row[i] / float(self.frames[n] - 1) for i, n in enumerate(names)}
 
-    def page(self, name, over=None):
+    def page(self, name, over=None, texts=None):
         k = [pg["name"] for pg in M.PAGES].index(name)
         self.pv.over = over or {}
+        self.pv.texts = texts or {}
         return self.pv.draw(self.pv.tabs[k]).convert("RGB")
 
 
@@ -273,11 +282,12 @@ def screens(skin, eng):
     held = dict(skin.face_over(rest[:5] + [4] + rest[6:]), Mode=mode(1), Breathe=1.0)
     out["play"] = skin.page("PLAY", held)
     out["vowel"] = skin.page("VOWEL", {"Mode": mode(1)})
-    speak = rest
+    speak, said = rest, {"Now": "Hello.", "Next": "Can you hear me?"}
     if eng:
         rows = eng["speak"]["rows"]
         speak = max(rows, key=lambda r: (r[5], r[0]))
-    out["speak"] = skin.page("SPEAK", dict(skin.face_over(speak), Mode=mode(2)))
+        said = now_next(eng["speak"], rows.index(speak)) or said
+    out["speak"] = skin.page("SPEAK", dict(skin.face_over(speak), Mode=mode(2)), said)
     out["sounds"] = skin.page("SOUNDS", {"Mode": mode(2)})
     beat = {"Mode": mode(3), "Play Beat": 1.0}
     kit = dict(beat)
@@ -293,9 +303,23 @@ def screens(skin, eng):
             kit["Hit"] = skin.choice("Hit", rows[i][7])
     out["beatbox"] = skin.page("BEATBOX", beat)
     out["kit"] = skin.page("KIT", kit)
+    # NOTES with the Hum Bass pattern picked: its steps and hum notes
+    hum = {"Mode": mode(3), "Beat": skin.choice("Beat", M.HUM_BASS[0])}
+    for i, (sound, note) in enumerate(zip(M.HUM_BASS[1], M.HUM_BASS[2])):
+        hum["Step %d" % (i + 1)] = skin.choice("Step %d" % (i + 1), 0 if sound == "." else 1 + M.PAD_SOUNDS.index(sound))
+        hum["Note %d" % (i + 1)] = skin.choice("Note %d" % (i + 1), 1 + note - M.NOTE_LOW if note else 0)
+    out["notes"] = skin.page("NOTES", hum)
     out["words"] = skin.page("WORDS", {"Mode": mode(2)})
     out["body"] = skin.page("BODY")
     return out
+
+
+def now_next(run, i):
+    """the engine's NOW and NEXT at look i of a run, as the Now and Next parameters' texts"""
+    texts = run.get("texts")
+    if not texts or i >= len(texts):
+        return None
+    return {"Now": texts[i][0], "Next": texts[i][1]}
 
 
 def lyric_strip(w, h, now):
@@ -329,7 +353,7 @@ def hero(skin, eng):
                 now = -1          # the line is over
             if now not in strips:
                 strips[now] = lyric_strip(w, strip_h, now)
-            page = skin.page("SING", skin.face_over(row)).resize((w, sh), Image.LANCZOS)
+            page = skin.page("SING", skin.face_over(row), now_next(eng["sing"], i)).resize((w, sh), Image.LANCZOS)
             f = Image.new("RGB", (w, sh + strip_h), (0, 0, 0))
             f.paste(page, (0, 0))
             f.paste(strips[now], (0, sh))
@@ -391,6 +415,7 @@ struct Rig {
     next: usize,
     rec: bool,
     rows: Vec<[i32; 11]>,
+    texts: Vec<(String, String)>,
     notes: Vec<usize>,
 }
 
@@ -400,7 +425,7 @@ impl Rig {
         let h = cm_new(FS, dir.as_ptr(), std::ptr::null());
         let mut q = vec![0.0f32; p::COUNT];
         cm_param_defaults(q.as_mut_ptr(), p::COUNT as i32);
-        Rig { h, q, n: 0, next: 0, rec: false, rows: Vec::new(), notes: Vec::new() }
+        Rig { h, q, n: 0, next: 0, rec: false, rows: Vec::new(), texts: Vec::new(), notes: Vec::new() }
     }
 
     fn render(&mut self, seconds: f64) {
@@ -416,6 +441,11 @@ impl Rig {
             if self.rec && self.n >= self.next {
                 self.next += LOOK;
                 self.rows.push([f[0], f[1], f[2], f[3], f[4], f[5], d[1], d[2], d[3], s[0], s[1]]);
+                let mut t = [0u8; 64];
+                cm_now_next(self.h, t.as_mut_ptr(), 64);
+                let t = std::ffi::CStr::from_bytes_until_nul(&t).unwrap().to_string_lossy().into_owned();
+                let (now, next) = t.split_once('\n').unwrap_or(("", ""));
+                self.texts.push((now.to_string(), next.to_string()));
             }
         }
     }
@@ -443,7 +473,8 @@ impl Rig {
 
     fn json(&self) -> String {
         let rows: Vec<String> = self.rows.iter().map(|r| format!("{:?}", r)).collect();
-        format!("{{\"notes\": {:?}, \"rows\": [{}]}}", self.notes, rows.join(", "))
+        let texts: Vec<String> = self.texts.iter().map(|(a, b)| format!("[{:?}, {:?}]", a, b)).collect();
+        format!("{{\"notes\": {:?}, \"rows\": [{}], \"texts\": [{}]}}", self.notes, rows.join(", "), texts.join(", "))
     }
 }
 

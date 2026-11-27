@@ -39,7 +39,7 @@ use std::ffi::{CStr, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use texts::{TextBank, Texts};
-use worker::{Hub, Lyrics, Request, Speech, TRASH_ROOM, Trash};
+use worker::{Hub, Lyrics, Request, Speech, SylTexts, TRASH_ROOM, Trash};
 
 /// The plugin's parameters, in the plugin's order (`src/CHIMERAMPC.cpp` declares the same list).
 /// Values arrive in plain units.
@@ -104,6 +104,8 @@ pub mod p {
     // 73..83: the screen's read-only displays and the typing cursor (the C++ side's; ignored here)
     pub const PAD_NOTES: usize = 84; // Beatbox: pad 1's note 0..=PAD_BASE_MAX (chromatic), PAD_NOTES_CLASSIC or PAD_NOTES_LEARN
     pub const COUNT: usize = 85;
+    // the plugin's parameters after these are its own: 85 Last Note, 86 and 87 the screen's Now
+    // and Next (cm_now_next), 88..103 the steps' hum notes and 104..119 their accents (cm_step_notes)
 }
 
 const MODE_SING: i32 = 0;
@@ -114,6 +116,14 @@ const MODE_BEATBOX: i32 = 3;
 /// The steps' and pads' sounds, after "rest" / "none" (parameter value 0).
 pub const STEP_IDS: [&str; 10] = ["B", "t", "Pf", "K", "^K", "!", "P!", "tss", "kch", "m"];
 const STEPS: usize = 16;
+/// An accented step's accent, as CHIMERA's ">" (beatbox::parse_beat); a pad's velocity is
+/// multiplied by it, up to PAD_ACCENT_MAX.
+pub const STEP_ACCENT: f64 = 1.3;
+const PAD_ACCENT_MAX: f64 = 1.6;
+/// The screen's NOW / NEXT: each at most this many bytes (one parameter's display text, which the
+/// SDK framework keeps to 31), cut at a character boundary with "…"; the two with a line break.
+pub const NOW_NEXT_TEXT: usize = 31;
+const NOW_NEXT_BYTES: usize = 2 * NOW_NEXT_TEXT + 1;
 
 /// Pitch bend range each way (semitones), as CHIMERA's plugin; an MPE note channel's.
 const BEND_RANGE: f64 = 2.0;
@@ -336,6 +346,21 @@ pub struct ChimeraMpc {
     to_trash: Vec<Trash>,
     /// each slot's syllables once ready (moved in, never freed here)
     lyrics: Lyrics,
+    /// each slot's syllables' texts, for the screen (all slots stay here; the singer takes none)
+    syl_texts: SylTexts,
+    /// the syllable last sung (the Singer's sung(), kept after its note ends) and the line last
+    /// said, for the screen's NOW
+    sing_now: Option<usize>,
+    speech_said: Option<usize>,
+    /// the screen's "NOW\nNEXT" and a serial that moves when it changes
+    now_next: [u8; NOW_NEXT_BYTES],
+    now_next_len: usize,
+    now_next_serial: u32,
+    /// each step's hum note (MIDI, 0: the hum's own note) and accent (0 / 1), from cm_step_notes;
+    /// `steps_dirty` when they changed and the sequencer has not had them yet
+    step_notes: [f32; STEPS],
+    step_accents: [f32; STEPS],
+    steps_dirty: bool,
     /// the slot the singer holds (its Vec is in the singer, the slot's entry is empty)
     sung_slot: Option<usize>,
     /// the Singer's own first lyrics ("ah"), parked: dropping them would free on the audio thread
@@ -430,6 +455,15 @@ impl ChimeraMpc {
             hub,
             to_trash: Vec::with_capacity(TRASH_ROOM),
             lyrics: Vec::new(),
+            syl_texts: Vec::new(),
+            sing_now: None,
+            speech_said: None,
+            now_next: [0; NOW_NEXT_BYTES],
+            now_next_len: 0,
+            now_next_serial: 0,
+            step_notes: [0.0; STEPS],
+            step_accents: [0.0; STEPS],
+            steps_dirty: false,
             sung_slot: None,
             first_lyrics: Vec::new(),
             speech: None,
@@ -562,7 +596,13 @@ impl ChimeraMpc {
         let speech = o.speech.take();
         let blend = o.blend.take();
         drop(o);
-        if let Some(mut l) = lyrics {
+        if let Some((mut l, texts)) = lyrics {
+            // the texts come with their syllables: the screen's NOW starts over
+            let old = core::mem::replace(&mut self.syl_texts, texts);
+            if !old.is_empty() {
+                self.trash(Trash::Texts(old));
+            }
+            self.sing_now = None;
             match self.sung_slot {
                 Some(s) if s < l.len() => {
                     // the singer takes the slot's new syllables; its old ones go out
@@ -579,6 +619,11 @@ impl ChimeraMpc {
             }
         }
         if let Some(s) = speech {
+            // the line last said stays NOW unless the slot's lines changed (typed)
+            let slot = self.speech_slot();
+            if self.speech.as_ref().is_none_or(|o| o.texts.get(slot) != s.texts.get(slot)) {
+                self.speech_said = None;
+            }
             if let Some(old) = self.speech.replace(s) {
                 self.trash(Trash::Speech(old));
             }
@@ -619,6 +664,7 @@ impl ChimeraMpc {
             return;
         }
         let outgoing = self.singer.set_syllables(incoming);
+        self.sing_now = None;
         match self.sung_slot {
             Some(prev) => self.lyrics[prev] = outgoing,
             None => self.first_lyrics = outgoing,
@@ -648,6 +694,7 @@ impl ChimeraMpc {
             let g: &[Gesture] = &s.lines[slot][b][i];
             self.engine.schedule(g, SPEECH_LEAD, true);
         }
+        self.speech_said = Some(i);
         self.speech_cursor = (i + 1) % n;
     }
 
@@ -664,9 +711,14 @@ impl ChimeraMpc {
 
     // --- beatbox
 
+    /// Square `i` as the sequencer and the pads play it: its sound, its hum note (None: the hum's
+    /// own, BASS_NOTE) and its accent.
     fn beat_step(&self, i: usize) -> Option<BeatStep> {
         let k = self.params[p::STEP_1 + i].round() as usize;
-        (1..=STEP_IDS.len()).contains(&k).then(|| BeatStep { id: Label::new(STEP_IDS[k - 1]), note: None, accent: None })
+        let n = self.step_notes[i];
+        let note = (n >= 1.0).then(|| n.round().min(127.0) as f64);
+        let accent = (self.step_accents[i] >= 0.5).then_some(STEP_ACCENT);
+        (1..=STEP_IDS.len()).contains(&k).then(|| BeatStep { id: Label::new(STEP_IDS[k - 1]), note, accent })
     }
 
     /// Sing's lookahead: while the MPC's sequence runs, each vowel lands BEAT_LATENCY after its
@@ -684,9 +736,15 @@ impl ChimeraMpc {
     }
 
     fn beat_hit(&mut self, id: &str, accent: f64) {
-        self.show_hit(id);
-        let step = BeatStep { id: Label::new(id), note: None, accent: Some(accent) };
-        let hit = self.beat_time(id);
+        self.beat_hit_step(BeatStep { id: Label::new(id), note: None, accent: None }, accent);
+    }
+
+    /// A hit of `step` (its note, and its accent times `accent`: a pad's velocity).
+    fn beat_hit_step(&mut self, mut step: BeatStep, accent: f64) {
+        let id = step.id;
+        self.show_hit(id.as_str());
+        step.accent = Some((accent * step.accent.unwrap_or(1.0)).min(PAD_ACCENT_MAX));
+        let hit = self.beat_time(id.as_str());
         self.engine.beat_hit_at(&step, hit, BEAT_HIT_LEN, None);
     }
 
@@ -880,6 +938,9 @@ impl ChimeraMpc {
         if changed(p::SPEECH) || changed(p::START_LINE) {
             self.speech_cursor = q[p::START_LINE].round().max(0.0) as usize;
         }
+        if changed(p::SPEECH) {
+            self.speech_said = None;
+        }
         if changed(p::SPEAK) && q[p::SPEAK] >= 0.5 && was[p::SPEAK] < 0.5 && self.mode == MODE_SPEAK {
             self.say_next(1.0);
         }
@@ -887,7 +948,8 @@ impl ChimeraMpc {
             self.say_pad(q[p::CONSONANT].round() as usize - 1);
         }
         // the sequencer
-        if (p::STEP_1..p::STEP_1 + STEPS).any(changed) {
+        if (p::STEP_1..p::STEP_1 + STEPS).any(changed) || self.steps_dirty {
+            self.steps_dirty = false;
             let mut steps = [None; STEPS];
             for (i, s) in steps.iter_mut().enumerate() {
                 *s = self.beat_step(i);
@@ -961,6 +1023,40 @@ impl ChimeraMpc {
         drop(b);
         self.preview_dirty = false;
         self.preview_serial = self.preview_serial.wrapping_add(1);
+    }
+
+    /// The screen's NOW and NEXT: in Sing the syllable last sung and the one the next note sings,
+    /// in Speak the line last said and the one the next note says; nothing in the other modes.
+    fn now_next_texts(&self) -> (&str, &str) {
+        fn pick(t: &[String], i: Option<usize>) -> &str {
+            i.and_then(|i| t.get(i)).map_or("", |s| s.as_str())
+        }
+        match self.mode {
+            MODE_SING => match self.sung_slot.and_then(|s| self.syl_texts.get(s)) {
+                Some(t) if !t.is_empty() => (pick(t, self.sing_now), pick(t, Some(self.singer.cursor()))),
+                // before the lyrics are ready a note sings "ah"
+                _ => ("", "ah"),
+            },
+            MODE_SPEAK => match self.speech.as_ref().and_then(|s| s.texts.get(self.speech_slot())) {
+                Some(t) if !t.is_empty() => (pick(t, self.speech_said), pick(t, Some(self.speech_cursor % t.len()))),
+                _ => ("", ""),
+            },
+            _ => ("", ""),
+        }
+    }
+
+    /// Work out "NOW\nNEXT" again; the serial moves if it changed. Allocation-free.
+    fn update_now_next(&mut self) {
+        let mut buf = [0u8; NOW_NEXT_BYTES];
+        let (now, next) = self.now_next_texts();
+        let mut len = fit_text(now, &mut buf, 0);
+        buf[len] = b'\n';
+        len = fit_text(next, &mut buf, len + 1);
+        if buf[..len] != self.now_next[..self.now_next_len] {
+            self.now_next = buf;
+            self.now_next_len = len;
+            self.now_next_serial = self.now_next_serial.wrapping_add(1);
+        }
     }
 
     fn update_gate(&mut self) {
@@ -1076,7 +1172,10 @@ impl ChimeraMpc {
         match self.mode {
             MODE_SING => {
                 self.singer.delay = self.sing_delay();
-                self.singer.note_on(&mut self.engine, note, velocity as f64)
+                self.singer.note_on(&mut self.engine, note, velocity as f64);
+                if let Some(i) = self.singer.sung() {
+                    self.sing_now = Some(i);
+                }
             }
             MODE_SPEAK => {
                 let semitones = (note as f64 - SPEECH_ROOT).clamp(-SPEECH_RANGE, SPEECH_RANGE);
@@ -1094,7 +1193,7 @@ impl ChimeraMpc {
                     // a pad: its square lights, and plays the sound in it (a rest stays silent)
                     self.show_step(i);
                     if let Some(s) = self.beat_step(i) {
-                        self.beat_hit(s.id.as_str(), accent);
+                        self.beat_hit_step(s, accent);
                     }
                 } else if note >= HUM_FROM {
                     self.remove_hum(note);
@@ -1246,6 +1345,33 @@ impl Drop for ChimeraMpc {
     }
 }
 
+/// `s` into `out` at `at`, at most NOW_NEXT_TEXT bytes: cut at a character boundary with "…" if
+/// longer, a line break read as a space. Returns where it ends.
+fn fit_text(s: &str, out: &mut [u8], at: usize) -> usize {
+    const MORE: &str = "…";
+    let s = s.trim();
+    let cut = if s.len() <= NOW_NEXT_TEXT {
+        s.len()
+    } else {
+        let mut n = NOW_NEXT_TEXT - MORE.len();
+        while !s.is_char_boundary(n) {
+            n -= 1;
+        }
+        n
+    };
+    let body = s[..cut].trim_end();
+    let mut end = at;
+    for &b in body.as_bytes() {
+        out[end] = if b == b'\n' || b == b'\r' { b' ' } else { b };
+        end += 1;
+    }
+    if cut < s.len() {
+        out[end..end + MORE.len()].copy_from_slice(MORE.as_bytes());
+        end += MORE.len();
+    }
+    end
+}
+
 /// General MIDI's drum keys -> beatbox sounds, as CHIMERA's plugin maps them.
 pub fn drum_pad(midi: u8) -> Option<&'static str> {
     Some(match midi {
@@ -1270,6 +1396,19 @@ pub fn preset_steps(i: usize) -> Option<([f32; STEPS], f32, f32)> {
         *o = s.and_then(|s| STEP_IDS.iter().position(|id| *id == s.id.as_str())).map_or(0.0, |k| (k + 1) as f32);
     }
     Some((out, pr.bpm as f32, pr.swing as f32))
+}
+
+/// A beat preset's hum notes (MIDI, 0: the hum's own note) and accents (0 / 1), step by step.
+pub fn preset_notes(i: usize) -> Option<([f32; STEPS], [f32; STEPS])> {
+    let pr = BEAT_PRESETS.get(i)?;
+    let (mut notes, mut accents) = ([0.0f32; STEPS], [0.0f32; STEPS]);
+    for ((n, a), s) in notes.iter_mut().zip(accents.iter_mut()).zip(parse_beat(pr.text)) {
+        if let Some(s) = s {
+            *n = s.note.map_or(0.0, |x| x as f32);
+            *a = if s.accent.is_some_and(|x| x > 1.0) { 1.0 } else { 0.0 };
+        }
+    }
+    Some((notes, accents))
 }
 
 /// CHIMERA's own defaults (the voice source's) and the neutral posture, in parameter order.
@@ -1527,6 +1666,73 @@ pub extern "C" fn cm_beat_preset(index: i32, steps16: *mut f32, bpm: *mut f32, s
         }
         _ => 0,
     }
+}
+
+/// Beat preset `index`'s hum notes (16 values: a MIDI note, or 0 for the hum's own note) and
+/// accents (16 values, 0 or 1). Returns 0 when there is no such preset.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_beat_preset_notes(index: i32, notes16: *mut f32, accents16: *mut f32) -> i32 {
+    if notes16.is_null() || accents16.is_null() || index < 0 {
+        return 0;
+    }
+    match catch_unwind(|| preset_notes(index as usize)) {
+        Ok(Some((n, a))) => {
+            // SAFETY: the caller gives room for 16 values each
+            unsafe {
+                std::ptr::copy_nonoverlapping(n.as_ptr(), notes16, STEPS);
+                std::ptr::copy_nonoverlapping(a.as_ptr(), accents16, STEPS);
+            }
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// The steps' hum notes (16 values: a MIDI note, or 0 for the hum's own note, BASS_NOTE) and
+/// accents (16 values, 0 or 1), as the sequencer and the pads play the squares. Once a block, on
+/// the audio thread; the sequencer takes them at the next render when they changed.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_step_notes(h: *mut ChimeraMpc, notes16: *const f32, accents16: *const f32) {
+    if notes16.is_null() || accents16.is_null() {
+        return;
+    }
+    // SAFETY: the caller gives 16 values each
+    let (n, a) = unsafe { (std::slice::from_raw_parts(notes16, STEPS), std::slice::from_raw_parts(accents16, STEPS)) };
+    guarded(h, |e| {
+        let same = |x: &[f32], y: &[f32]| x.iter().zip(y).all(|(p, q)| p.to_bits() == q.to_bits());
+        if !same(n, &e.step_notes) || !same(a, &e.step_accents) {
+            e.step_notes.copy_from_slice(n);
+            e.step_accents.copy_from_slice(a);
+            e.steps_dirty = true;
+        }
+    });
+}
+
+/// The screen's NOW and NEXT as "NOW\nNEXT" into `out` (UTF-8, NUL-terminated, up to `cap`
+/// bytes; each part at most NOW_NEXT_TEXT bytes): in Sing the syllable last sung and the one the
+/// next note sings, in Speak the line last said and the one the next note says, empty in the
+/// other modes. Returns a serial that moves whenever either changes. Once a block, on the audio
+/// thread; allocates nothing.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_now_next(h: *mut ChimeraMpc, out: *mut u8, cap: i32) -> u32 {
+    let mut serial = 0;
+    guarded(h, |e| {
+        e.update_now_next();
+        serial = e.now_next_serial;
+        if !out.is_null() && cap > 0 {
+            // cut short only at a character boundary
+            let mut n = e.now_next_len.min(cap as usize - 1);
+            while n > 0 && n < e.now_next_len && e.now_next[n] & 0xC0 == 0x80 {
+                n -= 1;
+            }
+            // SAFETY: the caller gives room for cap bytes
+            unsafe {
+                std::ptr::copy_nonoverlapping(e.now_next.as_ptr(), out, n);
+                *out.add(n) = 0;
+            }
+        }
+    });
+    serial
 }
 
 /// After a state load: the momentary controls' values as they now stand do not act.

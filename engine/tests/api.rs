@@ -36,6 +36,9 @@ fn write_wav(name: &str, x: &[f32]) {
 struct Rig {
     h: *mut ChimeraMpc,
     params: Vec<f32>,
+    /// the squares' hum notes (MIDI, 0 the hum's own) and accents, as the plugin sends them
+    notes: [f32; 16],
+    accents: [f32; 16],
     out: Vec<f32>,
 }
 
@@ -46,7 +49,21 @@ impl Rig {
         assert!(!h.is_null());
         let mut params = vec![0.0f32; p::COUNT];
         cm_param_defaults(params.as_mut_ptr(), p::COUNT as i32);
-        Rig { h, params, out: Vec::new() }
+        Rig { h, params, notes: [0.0; 16], accents: [0.0; 16], out: Vec::new() }
+    }
+
+    /// An engine whose text bank was loaded with `bank` (cm_texts_save's format) first.
+    fn with_texts(bank: &[u8]) -> Rig {
+        let t = cm_texts_new();
+        assert_eq!(cm_texts_load(t, bank.as_ptr(), bank.len() as i32), 1);
+        let dir = CString::new(content_dir()).unwrap();
+        let h = cm_new(FS, dir.as_ptr(), t);
+        // the engine holds its own reference to the bank
+        cm_texts_free(t);
+        assert!(!h.is_null());
+        let mut params = vec![0.0f32; p::COUNT];
+        cm_param_defaults(params.as_mut_ptr(), p::COUNT as i32);
+        Rig { h, params, notes: [0.0; 16], accents: [0.0; 16], out: Vec::new() }
     }
 
     fn set(&mut self, i: usize, v: f32) {
@@ -57,6 +74,7 @@ impl Rig {
         let mut buf = [0.0f32; 128];
         for _ in 0..(seconds * FS / 128.0) as usize {
             cm_set_params(self.h, self.params.as_ptr(), p::COUNT as i32);
+            cm_step_notes(self.h, self.notes.as_ptr(), self.accents.as_ptr());
             cm_render(self.h, buf.as_mut_ptr(), 128);
             self.out.extend_from_slice(&buf);
         }
@@ -1193,4 +1211,257 @@ fn pads_from_c3_up_play_squares_not_hums() {
     let (_, moved, level, _) = tap(&mut r, 72, 0.6);
     assert!(!moved);
     assert!(level > 0.003, "C4 did not hum: {level}");
+}
+
+// ---------------------------------------------------------------- what comes next (NOW / NEXT)
+
+/// The screen's NOW and NEXT, and cm_now_next's serial.
+fn now_next(r: &Rig) -> (String, String, u32) {
+    let mut buf = [0u8; 64];
+    let serial = cm_now_next(r.h, buf.as_mut_ptr(), 64);
+    let text = std::ffi::CStr::from_bytes_until_nul(&buf).unwrap().to_str().expect("UTF-8").to_string();
+    let (now, next) = text.split_once('\n').expect("NOW, a line break, NEXT");
+    assert!(now.len() <= NOW_NEXT_TEXT && next.len() <= NOW_NEXT_TEXT, "over 31 bytes: {now:?} / {next:?}");
+    (now.to_string(), next.to_string(), serial)
+}
+
+/// A note in Sing: sung, then let go.
+fn sing_note(r: &mut Rig, note: i32) {
+    cm_note_on(r.h, note, 100);
+    r.render(0.2);
+    cm_note_off(r.h, note);
+    r.render(0.05);
+}
+
+/// A text bank with one slot (target 0 Speak, 1 Sing) typed in.
+fn bank(target: u8, slot: u8, text: &str) -> Vec<u8> {
+    let mut b = b"CMT1".to_vec();
+    b.extend_from_slice(&[target, slot]);
+    b.extend_from_slice(&(text.len() as u16).to_le_bytes());
+    b.extend_from_slice(text.as_bytes());
+    b
+}
+
+#[test]
+fn singing_moves_now_and_next_through_the_lyrics() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 0.0);
+    r.wait_for_lyrics();
+    // "Hello there, I am a voice made of air."
+    let (now, next, mut serial) = now_next(&r);
+    println!("before: {now:?} / {next:?}");
+    assert_eq!((now.as_str(), next.as_str()), ("", "Hel"));
+    let mut sung = vec![];
+    for note in [57, 59, 60, 62, 64, 62] {
+        let was_next = now_next(&r).1;
+        sing_note(&mut r, note);
+        let (now, next, s) = now_next(&r);
+        println!("{now:?} / {next:?}");
+        assert_eq!(now, was_next, "the note sang what NEXT said");
+        assert_ne!(s, serial, "the serial moved");
+        serial = s;
+        sung.push(now);
+    }
+    assert_eq!(sung, ["Hel", "lo", "there", "I", "am", "a"]);
+    // the serial stands still while nothing changes
+    r.render(0.2);
+    assert_eq!(now_next(&r).2, serial);
+    // Start Syl moves NEXT; NOW stays the syllable last sung
+    r.set(p::START_SYL, 2.0);
+    r.render(0.02);
+    let (now, next, _) = now_next(&r);
+    assert_eq!((now.as_str(), next.as_str()), ("a", "there"));
+    // another slot starts over: nothing sung yet, NEXT its first syllable
+    r.set(p::LYRICS, 2.0); // "She sells sea shells by the sea shore."
+    r.set(p::START_SYL, 0.0);
+    r.render(0.02);
+    let (now, next, _) = now_next(&r);
+    assert_eq!((now.as_str(), next.as_str()), ("", "She"));
+    // Play shows nothing
+    r.set(p::MODE, 1.0);
+    r.render(0.02);
+    let (now, next, _) = now_next(&r);
+    assert_eq!((now.as_str(), next.as_str()), ("", ""));
+}
+
+#[test]
+fn a_melisma_reads_as_the_vowel_it_carries_on() {
+    let mut r = Rig::with_texts(&bank(1, 0, "Oh - - my love"));
+    r.set(p::MODE, 0.0);
+    r.wait_for_lyrics();
+    let mut shown = vec![now_next(&r).1];
+    for note in [60, 62, 64, 65, 67] {
+        cm_note_on(r.h, note, 100);
+        r.render(0.2);
+        shown.push(now_next(&r).0);
+        cm_note_off(r.h, note);
+    }
+    r.render(0.3);
+    println!("{shown:?}");
+    assert_eq!(shown, ["Oh", "Oh", "Oh~", "Oh~", "my", "love"]);
+}
+
+#[test]
+fn speak_shows_the_line_said_and_the_next_one() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 2.0);
+    r.set(p::SPEECH, 1.0); // "I am a voice made of air." / "Every sound comes from a simulated airway."
+    r.wait_for_lyrics();
+    let (a, b) = ("I am a voice made of air.", "Every sound comes from a sim\u{2026}");
+    let (now, next, _) = now_next(&r);
+    assert_eq!((now.as_str(), next.as_str()), ("", a));
+    cm_note_on(r.h, 60, 100);
+    r.render(0.1);
+    cm_note_off(r.h, 60);
+    let (now, next, _) = now_next(&r);
+    assert_eq!((now.as_str(), next.as_str()), (a, b), "the long line is cut to 31 bytes with an ellipsis");
+    cm_note_on(r.h, 62, 100);
+    r.render(0.1);
+    cm_note_off(r.h, 62);
+    let (now, next, _) = now_next(&r);
+    assert_eq!((now.as_str(), next.as_str()), (b, a), "back to the first line");
+    // Speak (the button) says the next line too
+    r.set(p::SPEAK, 1.0);
+    r.render(0.05);
+    r.set(p::SPEAK, 0.0);
+    r.render(0.05);
+    assert_eq!(now_next(&r).0, a);
+    // another slot: nothing said there yet
+    r.set(p::SPEECH, 2.0); // "One, two, three, four."
+    r.render(0.05);
+    let (now, next, _) = now_next(&r);
+    assert_eq!((now.as_str(), next.as_str()), ("", "One, two, three, four."));
+}
+
+#[test]
+fn now_and_next_stay_within_31_bytes_at_a_character_boundary() {
+    // a typed line of two-byte characters, longer than 31 bytes (each line of a slot is one line)
+    let line = "na\u{ef}ve caf\u{e9}, d\u{e9}j\u{e0} vu, na\u{ef}ve caf\u{e9}, d\u{e9}j\u{e0} vu";
+    let mut r = Rig::with_texts(&bank(0, 0, &format!("{line}\nGood night.")));
+    r.set(p::MODE, 2.0);
+    r.wait_for_lyrics();
+    let (_, next, _) = now_next(&r);
+    println!("{next:?} ({} bytes)", next.len());
+    assert!(next.ends_with('\u{2026}') && line.starts_with(next.trim_end_matches('\u{2026}')), "{next:?}");
+    // and every lyrics slot's syllables
+    let mut s = Rig::new();
+    s.set(p::MODE, 0.0);
+    s.wait_for_lyrics();
+    for slot in 0..8 {
+        s.set(p::LYRICS, slot as f32);
+        s.render(0.02);
+        for _ in 0..12 {
+            sing_note(&mut s, 60);
+            now_next(&s); // asserts the lengths
+        }
+    }
+}
+
+// ---------------------------------------------------------------- the steps' hum notes and accents
+
+fn midi_hz(n: f64) -> f64 {
+    440.0 * 2f64.powf((n - 69.0) / 12.0)
+}
+
+/// Beatbox with every square a hum on `note`, the beat running on its own tempo: the pitch it hums.
+fn hum_pitch(note: f32) -> f64 {
+    let mut r = beatbox_rig(&(0..16).map(|i| (i, 10.0)).collect::<Vec<_>>());
+    r.notes = [note; 16];
+    r.set(p::PLAY_BEAT, 1.0);
+    r.render(1.0);
+    r.out.clear();
+    r.render(1.0);
+    write_wav(&format!("hum_note_{note}.wav"), &r.out);
+    pitch_of(&r.out[4410..4410 + 8192])
+}
+
+/// Pad `square + 1` hit once (velocity 100): the pitch of its hum.
+fn pad_hum_pitch(r: &mut Rig, square: usize) -> f64 {
+    cm_note_on(r.h, PAD_NOTE_FIRST as i32 + square as i32, 100);
+    r.out.clear();
+    r.render(0.2);
+    cm_note_off(r.h, PAD_NOTE_FIRST as i32 + square as i32);
+    // the hum glides into its note (the voice's Glide): measured from 80 ms in
+    let start = r.out.iter().position(|x| x.abs() > 0.01).unwrap_or(0) + (0.08 * FS) as usize;
+    pitch_of(&r.out[start..start + 3600])
+}
+
+#[test]
+fn a_steps_note_sets_the_hums_pitch() {
+    let own = hum_pitch(0.0);
+    let low = hum_pitch(43.0);
+    let high = hum_pitch(52.0);
+    println!("hum pitch: own {own:.1} Hz, note 43 {low:.1} Hz, note 52 {high:.1} Hz");
+    // the hum's own note is E1 (MIDI 40) as the MPC names it
+    assert!((own / midi_hz(40.0) - 1.0).abs() < 0.04, "own note {own}");
+    assert!((low / midi_hz(43.0) - 1.0).abs() < 0.04, "note 43 {low}");
+    assert!((high / midi_hz(52.0) - 1.0).abs() < 0.04, "note 52 {high}");
+    // a pad plays its square's note too
+    let mut r = beatbox_rig(&[(0, 10.0)]);
+    r.notes[0] = 52.0;
+    r.render(0.05);
+    let pad = pad_hum_pitch(&mut r, 0);
+    println!("pad hum {pad:.1} Hz");
+    assert!((pad / midi_hz(52.0) - 1.0).abs() < 0.04, "pad note 52 {pad}");
+}
+
+#[test]
+fn an_accented_step_is_louder() {
+    let level = |accent: f32, square: f32| {
+        let mut r = beatbox_rig(&[(0, square)]);
+        r.accents[0] = accent;
+        r.set(p::MIC, 0.0);
+        r.render(0.3);
+        let (_, _, level, _) = tap(&mut r, PAD_NOTE_FIRST as i32, 0.4);
+        level
+    };
+    // (Mic FX off: the close mic's compressor evens the hits out)
+    for (square, name) in [(1.0, "kick"), (2.0, "hat"), (3.0, "snare"), (8.0, "open hat"), (9.0, "crash"), (10.0, "hum")] {
+        let (plain, accented) = (level(0.0, square), level(1.0, square));
+        println!("pad {name}: plain {plain:.4}, accented {accented:.4} ({:+.1} dB)", 20.0 * (accented / plain).log10());
+        // (CHIMERA's kick is an ejective whose larynx push is already at its cap: no louder)
+        if name != "kick" {
+            assert!(accented > plain * 1.1, "{name}: accented {accented} plain {plain}");
+        }
+    }
+    // and in the beat: a snare every beat, all accented or none
+    let beat = |accent: f32| {
+        let mut r = beatbox_rig(&[(0, 3.0), (4, 3.0), (8, 3.0), (12, 3.0)]);
+        r.accents = [accent; 16];
+        r.set(p::MIC, 0.0);
+        r.set(p::PLAY_BEAT, 1.0);
+        r.render(0.5);
+        r.out.clear();
+        r.render(3.0);
+        write_wav(&format!("beat_accent_{accent}.wav"), &r.out);
+        rms(&r.out)
+    };
+    let (plain, accented) = (beat(0.0), beat(1.0));
+    println!("beat of snares: plain {plain:.4}, accented {accented:.4} ({:+.1} dB)", 20.0 * (accented / plain).log10());
+    assert!(accented > plain * 1.1, "the beat's accents: {accented} / {plain}");
+}
+
+#[test]
+fn picking_hum_bass_fills_the_notes() {
+    let (mut notes, mut accents) = ([0.0f32; 16], [0.0f32; 16]);
+    // "B m . m:43 | Pf . m:45 . | B m:40 . m | Pf . t kch"
+    assert_eq!(cm_beat_preset_notes(6, notes.as_mut_ptr(), accents.as_mut_ptr()), 1);
+    assert_eq!(notes, [0.0, 0.0, 0.0, 43.0, 0.0, 0.0, 45.0, 0.0, 0.0, 40.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(accents, [0.0; 16]);
+    // Your Beat is no preset: nothing to fill
+    assert_eq!(cm_beat_preset_notes(7, notes.as_mut_ptr(), accents.as_mut_ptr()), 0);
+    // Hum bass plays its melody: square 4 hums G1 (43), square 7 A1 (45)
+    let (mut steps, mut bpm, mut swing) = ([0.0f32; 16], 0.0, 0.0);
+    assert_eq!(cm_beat_preset(6, steps.as_mut_ptr(), &mut bpm, &mut swing), 1);
+    for (square, want) in [(3usize, 43.0), (6, 45.0)] {
+        let mut r = beatbox_rig(&[(square, steps[square])]);
+        r.notes = notes;
+        r.render(0.05);
+        let hz = pad_hum_pitch(&mut r, square);
+        println!("square {} hums {hz:.1} Hz", square + 1);
+        assert!((hz / midi_hz(want) - 1.0).abs() < 0.04, "square {}: {hz}", square + 1);
+    }
+    // a preset without notes puts them back to the hum's own note
+    assert_eq!(cm_beat_preset_notes(0, notes.as_mut_ptr(), accents.as_mut_ptr()), 1);
+    assert_eq!(notes, [0.0; 16]);
 }

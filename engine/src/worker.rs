@@ -20,7 +20,7 @@ use chimera::phonetics::ipa::tokenize_ipa;
 use chimera::phonetics::planner::{PhraseInput, PlanOptions, plan_phrases};
 use chimera::phonetics::sing::LiveSyllable;
 use chimera::phonetics::syllables::lyrics_to_syllables;
-use chimera::phonetics::Intonation;
+use chimera::phonetics::{Intonation, Syllable};
 use chimera::voice::human_voice::HumanVoice;
 use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -34,10 +34,15 @@ const TYPING_PAUSE: Duration = Duration::from_millis(400);
 
 /// Each slot's lyrics as the Singer holds them.
 pub type Lyrics = Vec<Vec<LiveSyllable>>;
+/// Each slot's syllables as the screen shows them (NOW / NEXT): one text per syllable of the
+/// slot's `Lyrics`, in the same order. A melisma reads as the syllable it carries on, with a "~".
+pub type SylTexts = Vec<Vec<String>>;
 /// What Speak says, planned for each preset body.
 pub struct Speech {
     /// slot -> body -> line -> gestures
     pub lines: Vec<[Vec<Vec<Gesture>>; 3]>,
+    /// slot -> line: each planned line's text (the screen's NOW / NEXT), in the order of `lines`
+    pub texts: Vec<Vec<String>>,
     /// the consonant chart: consonant -> vowel around it -> body -> gestures
     pub pads: Vec<[[Vec<Gesture>; 3]; 4]>,
 }
@@ -62,11 +67,13 @@ pub enum Trash {
     Speech(#[allow(dead_code)] Speech),
     Lyrics(#[allow(dead_code)] Lyrics),
     Syllables(#[allow(dead_code)] Vec<LiveSyllable>),
+    Texts(#[allow(dead_code)] SylTexts),
 }
 
 #[derive(Default)]
 pub struct Outbox {
-    pub lyrics: Option<Lyrics>,
+    /// the lyrics and their syllables' texts, handed over together
+    pub lyrics: Option<(Lyrics, SylTexts)>,
     pub speech: Option<Speech>,
     /// a voice built for this Blend mix
     pub blend: Option<((f32, f32), Box<HumanVoice>)>,
@@ -184,8 +191,36 @@ fn speech_lines(slots: &[String]) -> Vec<Vec<String>> {
         .collect()
 }
 
-fn plan_lyrics(slots: &[String], g2p: &EnglishG2P) -> Lyrics {
-    slots.iter().map(|t| syllables_from(&lyrics_to_syllables(if t.trim().is_empty() { DEFAULT_LYRICS } else { t }, g2p))).collect()
+/// The syllables' texts as the screen shows them, one per syllable `syllables_from` makes: a
+/// melisma (and a syllable whose spelling is only "~") reads as the syllable it carries on with a
+/// "~" after it ("air~"); no syllables sing "ah".
+pub fn shown_texts(syllables: &[Syllable]) -> Vec<String> {
+    if syllables.is_empty() {
+        return vec!["ah".to_string()];
+    }
+    let mut carried = String::new();
+    syllables
+        .iter()
+        .map(|s| {
+            let t = s.text.trim();
+            if s.melisma == Some(true) || t.chars().all(|c| c == '~') {
+                format!("{carried}~")
+            } else {
+                carried = t.to_string();
+                carried.clone()
+            }
+        })
+        .collect()
+}
+
+fn plan_lyrics(slots: &[String], g2p: &EnglishG2P) -> (Lyrics, SylTexts) {
+    slots
+        .iter()
+        .map(|t| {
+            let s = lyrics_to_syllables(if t.trim().is_empty() { DEFAULT_LYRICS } else { t }, g2p);
+            (syllables_from(&s), shown_texts(&s))
+        })
+        .unzip()
 }
 
 fn plan_speech(slots: &[Vec<String>], g2p: &EnglishG2P, rate: f64, ipa: bool) -> Speech {
@@ -199,15 +234,17 @@ fn plan_speech(slots: &[Vec<String>], g2p: &EnglishG2P, rate: f64, ipa: bool) ->
             [per_vowel(PAD_VOWELS[0]), per_vowel(PAD_VOWELS[1]), per_vowel(PAD_VOWELS[2]), per_vowel(PAD_VOWELS[3])]
         })
         .collect();
-    let lines = slots
+    let (lines, texts) = slots
         .iter()
         .map(|lines| {
-            let phrases: Vec<Vec<Phrase>> = lines.iter().map(|l| if ipa { ipa_phrases(l) } else { g2p.to_phrases(l) }).filter(|p| !p.is_empty()).collect();
+            // the lines with something to say, and their texts (kept in step for the screen)
+            let (phrases, texts): (Vec<Vec<Phrase>>, Vec<String>) =
+                lines.iter().map(|l| (if ipa { ipa_phrases(l) } else { g2p.to_phrases(l) }, l.clone())).filter(|(p, _)| !p.is_empty()).unzip();
             let per_body = |b: usize| phrases.iter().map(|p| plan_line(p, BODIES[b], rate)).collect::<Vec<_>>();
-            [per_body(0), per_body(1), per_body(2)]
+            ([per_body(0), per_body(1), per_body(2)], texts)
         })
-        .collect();
-    Speech { lines, pads }
+        .unzip();
+    Speech { lines, pads, texts }
 }
 
 fn run(hub: &Hub, fs: f64, content: Option<&str>, texts: &Texts) {

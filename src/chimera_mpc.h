@@ -42,6 +42,18 @@ void cm_vowel_posture(ChimeraMpc* engine, float front, float open, float* out9);
 
 // Beat preset `index` (0..6) as the 16 step parameter values, its tempo and swing; 0 if none.
 int cm_beat_preset(int index, float* steps16, float* bpm, float* swing);
+// Beat preset `index` (0..6)'s hum notes (16 values: a MIDI note, or 0 for the hum's own note) and
+// accents (16 values, 0 or 1); 0 if none.
+int cm_beat_preset_notes(int index, float* notes16, float* accents16);
+// The steps' hum notes (16 MIDI notes, 0 = the hum's own note) and accents (16 values, 0 or 1), as
+// the sequencer and the pads play the squares. Once a block, on the audio thread (applied when
+// they change).
+void cm_step_notes(ChimeraMpc* engine, const float* notes16, const float* accents16);
+// The screen's NOW and NEXT as "NOW\nNEXT" into out (UTF-8, NUL-terminated; each part at most 31
+// bytes): Sing's syllable last sung and the one the next note sings, Speak's line last said and the
+// one the next note says, empty in the other modes. Returns a serial that moves whenever either
+// changes. Once a block, on the audio thread.
+uint32_t cm_now_next(ChimeraMpc* engine, uint8_t* out, int cap);
 // The host's transport for the block about to render (frames in `samples`).
 void cm_transport(ChimeraMpc* engine, int playing, int bpm_valid, double bpm, int beats_valid, double beats, int samples);
 
