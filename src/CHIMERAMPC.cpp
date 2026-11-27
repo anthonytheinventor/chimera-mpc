@@ -18,7 +18,10 @@
 //         its pitch moved by how far the key is from C3 (up to two octaves either way).
 //   Beatbox the 16-step pattern (Beat picks a preset, which fills the steps), on its own tempo
 //         with Play Beat, or following the MPC's transport with Follow Host; notes below C3 hit
-//         drum sounds (General MIDI's drum map), notes from C3 up hum two octaves down.
+//         drum sounds (General MIDI's drum map), notes from C3 up hum two octaves down. The
+//         MPC's pads 1-16 play the BEATBOX squares: Pad 1 Note says which notes they send (a
+//         chromatic run from it, the classic MPC map, or Learn: the next note is pad 1's), and
+//         Last Note shows the note last played, so one tap shows what a pad sends.
 // Body: Male, Female, Child, or Blend (the engine's thread builds a voice for the mix; the
 // previous body plays until it is ready). Restart: Sing and Speak start over at Start Syl and
 // Start Line when the transport starts.
@@ -121,12 +124,23 @@ enum ParamIndex
     kStepLit,                  // read-only: the BEATBOX square to light (0 none, 1..16: a pad hit, or the beat's step)
     kCursor,                   // WORDS: the typing cursor (the data wheel on the text box), kCursorEnd = at the end
     kTyped2,                   // read-only: the text box's second row (Typed is the first; formatValue)
+    kPadNotes,                 // Beatbox: pad 1's note (0..112, a chromatic run from it), Classic (the classic MPC map) or Learn
+    kLastNote,                 // read-only: the last note played (0 none, then 1 + the note), on the BEATBOX page
     kNumParams
 };
 
-constexpr int kEngineParams = kKey + 1;   // the engine reads 0..kKey (engine/src/lib.rs, module p)
+constexpr int kEngineParams = kPadNotes + 1;   // the engine reads 0..kPadNotes (engine/src/lib.rs, module p; it ignores the displays)
+constexpr int kPadBaseMax = 112;   // Pad 1 Note's choices: 0..112 a note, then Classic, then Learn (engine PAD_BASE_MAX..)
+constexpr int kPadLearn = kPadBaseMax + 2;
 
-bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit || (i >= kVisJaw && i <= kVisSound) || i == kStepLit || i == kTyped2; }
+bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit || (i >= kVisJaw && i <= kVisSound) || i == kStepLit || i == kTyped2 || i == kLastNote; }
+
+// A note as the MPC names it (C-2 is note 0, C3 note 60): "61 C#3".
+std::string noteName(int n)
+{
+    static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    return std::to_string(n) + " " + names[n % 12] + std::to_string(n / 12 - 2);
+}
 
 // The momentary controls: a tap sets one and the MPC puts it back to 0 when the finger lifts, which
 // with a quick tap can happen before the next block reads it. Their taps are caught as the host
@@ -272,6 +286,16 @@ public:
         mpc::Param typed2 = mpc::intParam("typed2", "Typed 2", 0, 1023, 0);
         typed2.automatable = false;
         addParam(typed2);
+        // the pads' notes in Beatbox (engine pad_square) and the last note played, to see them
+        std::vector<std::string> padNotes, lastNote = {"-"};
+        for (int n = 0; n <= kPadBaseMax; ++n) padNotes.push_back(noteName(n));
+        padNotes.push_back("Classic");
+        padNotes.push_back("Learn");
+        addParam(mpc::choiceParam("pad_notes", "Pad 1 Note", padNotes, (int)d[kPadNotes]));
+        for (int n = 0; n < 128; ++n) lastNote.push_back(noteName(n));
+        mpc::Param last = mpc::choiceParam("last_note", "Last Note", lastNote, 0);
+        last.automatable = false;
+        addParam(last);
         texts_ = cm_texts_new();
 
         // Built-in programs: voices only. Each sets parameters 0-13 (Gain, the voice source, the
@@ -471,6 +495,15 @@ public:
         cm_step_lit(e, step);
         stepPad_.store(step[0], std::memory_order_relaxed);
         stepCount_.store(step[1], std::memory_order_release);
+        // Learn heard pad 1: its setting goes into Pad 1 Note (the helper thread tells the host)
+        int notes[3] = {-1, 0, -1};
+        cm_pad_notes(e, notes);
+        lastNote_.store(notes[0], std::memory_order_relaxed);
+        if (notes[2] >= 0 && getInt(kPadNotes) == kPadLearn)
+        {
+            set(kPadNotes, (float)notes[2]);
+            padLearned_.store(true, std::memory_order_release);
+        }
         processed_.fetch_add(1, std::memory_order_relaxed);
         inProcess_.store(false, std::memory_order_release);
     }
@@ -529,6 +562,7 @@ private:
         for (int& l : lastShown) l = -1;
         int lastHitCount = hitCount_.load(std::memory_order_acquire), shownHit = -1, hitLooks = 0;
         int lastStepCount = stepCount_.load(std::memory_order_acquire), shownStep = -1, stepLooks = 0;
+        int shownNote = -1;
         uint32_t lastProcessed = 0;
         for (;;)
         {
@@ -619,11 +653,23 @@ private:
                 setNormalised(kTyped2, (float)typed / 1023.0f);
                 notifyHostParameterChanged(kTyped2);
             }
+            // Learn's result, at once (it is not a knob sweep)
+            if (padLearned_.exchange(false, std::memory_order_acq_rel)) notifyHostParameterChanged(kPadNotes);
+            // the last note played, in Beatbox (BEATBOX shows it): reported when it changes (the
+            // same pad again changes nothing), held while a setting moves, as the pads are
+            const int note = lastNote_.load(std::memory_order_relaxed);
+            if (mode == 3 && note >= 0 && note != shownNote && knobLooks == 0)
+            {
+                shownNote = note;
+                set(kLastNote, (float)(note + 1));
+                notifyHostParameterChanged(kLastNote);
+            }
             // a drum hit lights its pad for a moment
             const int hits = hitCount_.load(std::memory_order_acquire);
             int lit = shownHit < 0 ? 0 : shownHit;
             // after a load or reset: the pads and squares go dark, whatever the project saved
             const bool dark = hitDark_.exchange(false, std::memory_order_acq_rel);
+            if (dark) shownNote = -1;   // a load may have brought another Last Note: the next note is shown again
             // the BEATBOX square of a pad hit or of the beat's step, lit for a moment as the pads are
             const int steps = stepCount_.load(std::memory_order_acquire);
             int litStep = shownStep < 0 ? 0 : shownStep;
@@ -793,7 +839,8 @@ private:
     std::atomic<uint32_t> tapWrite_{0};
     uint32_t tapRead_ = 0;   // the audio thread's
     std::atomic<int> tapLast_[4] = {};
-    std::atomic<int> velumFrame_{0}, hitPad_{0}, hitCount_{0}, stepPad_{0}, stepCount_{0};
+    std::atomic<int> velumFrame_{0}, hitPad_{0}, hitCount_{0}, stepPad_{0}, stepCount_{0}, lastNote_{-1};
+    std::atomic<bool> padLearned_{false};
     std::atomic<int> faceNow_[kFaceLayers] = {};
     int faceFrames_[kFaceLayers] = {10, 28, 18, 12, 7, 6};   // cm_face_frames
     int stripTurn_ = 0;                                 // the helper thread's

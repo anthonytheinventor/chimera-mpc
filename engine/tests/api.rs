@@ -1050,3 +1050,147 @@ fn the_preview_wraps_into_two_rows_around_the_cursor() {
     // every word of the text is whole in some row (breaks only at spaces)
     assert!(!end.contains("unn\n") && !start.contains("ow\nn"), "{end:?} {start:?}");
 }
+
+#[test]
+fn pad_1_note_maps_the_pads_chromatic_and_classic() {
+    // Chromatic C1 (the default), Chromatic C-2, a Pad Perform run from C0, and the top of the range
+    for base in [36u8, 0, 24, PAD_BASE_MAX] {
+        for i in 0..16u8 {
+            assert_eq!(pad_square(base + i, base), Some(i as usize), "base {base}, pad {}", i + 1);
+        }
+        if base > 0 {
+            assert_eq!(pad_square(base - 1, base), None);
+        }
+        if base + 16 < 128 {
+            assert_eq!(pad_square(base + 16, base), None);
+        }
+    }
+    // the classic MPC map: A01 37, A02 36, A03 42, A04 82 ... A16 53
+    assert_eq!(pad_square(37, PAD_NOTES_CLASSIC), Some(0));
+    assert_eq!(pad_square(36, PAD_NOTES_CLASSIC), Some(1));
+    assert_eq!(pad_square(42, PAD_NOTES_CLASSIC), Some(2));
+    assert_eq!(pad_square(82, PAD_NOTES_CLASSIC), Some(3));
+    assert_eq!(pad_square(53, PAD_NOTES_CLASSIC), Some(15));
+    assert_eq!(pad_square(39, PAD_NOTES_CLASSIC), None, "not a pad: a GM drum key");
+    let mut sorted = CLASSIC_PADS;
+    sorted.sort();
+    assert!(sorted.windows(2).all(|w| w[0] != w[1]), "each pad its own note");
+    // Learn: pad 1's note starts a chromatic run, except 37 (classic A01)
+    assert_eq!(learned_pad_notes(36), 36);
+    assert_eq!(learned_pad_notes(0), 0);
+    assert_eq!(learned_pad_notes(24), 24);
+    assert_eq!(learned_pad_notes(37), PAD_NOTES_CLASSIC);
+    assert_eq!(learned_pad_notes(120), PAD_BASE_MAX);
+    // the default stays Chromatic C1
+    let mut d = vec![0.0f32; p::COUNT];
+    cm_param_defaults(d.as_mut_ptr(), p::COUNT as i32);
+    assert_eq!(d[p::PAD_NOTES], PAD_NOTE_FIRST as f32);
+    assert_eq!(PAD_NOTE_FIRST, 36);
+}
+
+/// Beatbox with every square a rest except `sounds` (square, step value).
+fn beatbox_rig(sounds: &[(usize, f32)]) -> Rig {
+    let mut r = Rig::new();
+    r.set(p::MODE, 3.0);
+    r.set(p::FOLLOW, 0.0);
+    for i in 0..16 {
+        r.set(p::STEP_1 + i, 0.0);
+    }
+    for &(i, v) in sounds {
+        r.set(p::STEP_1 + i, v);
+    }
+    r.render(0.3);
+    r
+}
+
+/// Tap `note`: (square lit, the count moved, rms of the next `secs`, cm_pad_notes).
+fn tap(r: &mut Rig, note: i32, secs: f64) -> (i32, bool, f64, [i32; 3]) {
+    let mut lit = [0i32; 2];
+    cm_step_lit(r.h, lit.as_mut_ptr());
+    let before = lit[1];
+    cm_note_on(r.h, note, 110);
+    r.out.clear();
+    r.render(secs);
+    cm_note_off(r.h, note);
+    cm_step_lit(r.h, lit.as_mut_ptr());
+    let mut notes = [0i32; 3];
+    cm_pad_notes(r.h, notes.as_mut_ptr());
+    let level = rms(&r.out);
+    r.render(0.4);
+    (lit[0], lit[1] != before, level, notes)
+}
+
+#[test]
+fn pads_from_c_minus_2_play_the_squares_and_gm_keys_still_drum() {
+    let mut r = beatbox_rig(&[(0, 1.0)]);
+    r.set(p::PAD_NOTES, 0.0);
+    r.render(0.05);
+    let (lit, moved, level, notes) = tap(&mut r, 0, 0.4);
+    assert_eq!((lit, moved), (1, true), "pad 1 (note 0) lights square 1");
+    assert!(level > 0.003, "square 1's kick: {level}");
+    assert_eq!(notes[0], 0, "the last note is shown");
+    assert_eq!(notes[2], -1, "nothing learned");
+    // note 36 is no pad now: General MIDI's kick, no square lit
+    let (_, moved, level, notes) = tap(&mut r, 36, 0.4);
+    assert!(!moved, "a GM key lit a square");
+    assert!(level > 0.003, "the GM kick: {level}");
+    assert_eq!(notes[0], 36);
+}
+
+#[test]
+fn learn_takes_the_next_note_as_pad_1() {
+    let mut r = beatbox_rig(&[(0, 1.0), (3, 3.0), (15, 2.0)]);
+    r.set(p::PAD_NOTES, PAD_NOTES_LEARN as f32);
+    r.render(0.05);
+    // pad 1 sends 24 (Pad Perform from C0): it is learned and plays square 1 at once
+    let (lit, _, level, notes) = tap(&mut r, 24, 0.4);
+    assert_eq!(lit, 1);
+    assert!(level > 0.003, "the learning tap played nothing: {level}");
+    assert_eq!(notes, [24, notes[1], 24], "learned 24 for the plugin to write back");
+    // still Learn in the parameters (the plugin has not written it yet): the run from 24 holds
+    let (lit, _, _, _) = tap(&mut r, 27, 0.3);
+    assert_eq!(lit, 4);
+    // the plugin writes 24 into Pad 1 Note: nothing more to report, pad 16 is note 39
+    r.set(p::PAD_NOTES, 24.0);
+    r.render(0.05);
+    let (lit, _, level, notes) = tap(&mut r, 39, 0.4);
+    assert_eq!((lit, notes[2]), (16, -1));
+    assert!(level > 0.003, "square 16 sounded nothing: {level}");
+    // Learn again, and pad 1 sends 37: the classic MPC map, where note 82 is pad 4 (not a hum)
+    r.set(p::PAD_NOTES, PAD_NOTES_LEARN as f32);
+    r.render(0.05);
+    let (lit, _, _, notes) = tap(&mut r, 37, 0.3);
+    assert_eq!((lit, notes[2]), (1, PAD_NOTES_CLASSIC as i32));
+    let (lit, _, _, notes) = tap(&mut r, 82, 0.3);
+    assert_eq!((lit, notes[0]), (4, 82));
+}
+
+#[test]
+fn learn_waits_for_beatbox_and_shows_every_note() {
+    let mut r = Rig::new();
+    r.set(p::PAD_NOTES, PAD_NOTES_LEARN as f32);
+    r.set(p::MODE, 1.0); // Play
+    r.render(0.1);
+    cm_note_on(r.h, 64, 100);
+    r.render(0.1);
+    cm_note_off(r.h, 64);
+    let mut notes = [0i32; 3];
+    cm_pad_notes(r.h, notes.as_mut_ptr());
+    assert_eq!(notes[0], 64, "the last note shows in any mode");
+    assert_eq!(notes[2], -1, "Learn listens only in Beatbox");
+}
+
+#[test]
+fn pads_from_c3_up_play_squares_not_hums() {
+    // bank C of a run from C0 (or any run reaching C3): pad 5 is note 60; its square is a rest
+    let mut r = beatbox_rig(&[]);
+    r.set(p::PAD_NOTES, 56.0);
+    r.render(0.05);
+    let (lit, moved, level, _) = tap(&mut r, 60, 0.5);
+    assert_eq!((lit, moved), (5, true));
+    assert!(level < 1e-3, "a pad from C3 up hummed: {level}");
+    // a key past the pads still hums
+    let (_, moved, level, _) = tap(&mut r, 72, 0.6);
+    assert!(!moved);
+    assert!(level > 0.003, "C4 did not hum: {level}");
+}

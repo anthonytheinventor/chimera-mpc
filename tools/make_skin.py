@@ -164,7 +164,7 @@ PAGES = [
     {"name": "KIT", "fn": 3, "sub": 1, "right": "pads",
      "chips": [("MIC FX", "Mic FX", 96), ("FOLLOW", "Follow Host", 104)], "main": ("PLAY BEAT", "Play Beat"),
      "groups": [("BEAT", ["Beat", "Tempo", "Swing", "Mic FX"]), ("HUM VOICE", ["Breath", "Pressed", "Bright", "Glide"]),
-                ("TRANSPORT", ["Follow Host", "Play Beat", "Gain", None]), ("", [None, None, None, None])]},
+                ("TRANSPORT", ["Follow Host", "Play Beat", "Gain", "Pad 1 Note"]), ("", [None, None, None, None])]},
     {"name": "WORDS", "fn": 4, "sub": 0, "left": "words", "main": ("SPEAK", "Speak"), "caption": "SAYS THE NEXT LINE"},
     {"name": "BODY", "fn": 5, "sub": 0, "right": "face", "sub_word": "MIDSAGITTAL", "credit": True, "body_chips": True,
      "groups": [("BODY", ["Body", "Female", "Child", "Gain"]), ("SETUP", ["MPE", "Restart", "Whisper", "Breathe"]),
@@ -172,6 +172,8 @@ PAGES = [
 ]
 WORDS_ROW = ["Type Into", "Type Slot", "Speech Rate", "Start Line"]
 BIPOLAR = {"Larynx", "Tongue Root"}
+# Pad 1 Note's steps (src/CHIMERAMPC.cpp): notes 0..112, Classic, then Learn, the last
+PAD_LEARN = 114
 MOMENTARY = {"Speak"}      # back to off when the finger lifts: each tap acts once
 BODIES = ["MALE", "FEMALE", "CHILD", "BLEND"]
 BODY_CAPTIONS = ["ADULT MALE", "ADULT FEMALE", "CHILD", "BLEND"]
@@ -1150,6 +1152,15 @@ def face_screen(b, ch, page, face):
         b.label(ch, params["Beat"], (SX + SW - 300, TOP + 38, 284, 30), 22.0, AMBER, "right verticallyCentred", "Regular")
         b.label(ch, params["Tempo"], (SX + SW - 160, TOP + 70, 100, 26), 20.0, LABEL, "right verticallyCentred", "Regular")
         b.cap(ch, SX + SW - 54, TOP + 77, "BPM", 12, AMBER, "l", 0.1, 0.8)
+        # the pads' notes: the note last played (one tap on a pad shows what it sends), Pad 1 Note,
+        # and LEARN (lit while Pad 1 Note says Learn: the next note is pad 1's)
+        b.cap(ch, SX + SW - 138, TOP + 112, "LAST NOTE", 12, QUIET, "r", 0.1)
+        b.label(ch, params["Last Note"], (SX + SW - 128, TOP + 104, 112, 26), 20.0, LABEL, "right verticallyCentred", "Regular")
+        b.cap(ch, SX + SW - 138, TOP + 142, "PAD 1", 12, QUIET, "r", 0.1)
+        b.label(ch, params["Pad 1 Note"], (SX + SW - 128, TOP + 134, 112, 26), 20.0, LABEL, "right verticallyCentred", "Regular")
+        # (Pad 1 Note has more steps than host_sim lists as choices: its last one, Learn, by number)
+        on, off = chip_files("LEARN PAD 1", 128, 34, px=13)
+        b.button(ch, params["Pad 1 Note"], on, off, PAD_LEARN, PAD_LEARN + 1, SX + SW - 144, TOP + 168, name="learn pad 1")
 
 
 def vowel_screen(b, ch):
@@ -1206,8 +1217,8 @@ def pads_screen(b, ch):
     p = params["Pad"]
     for k, (x, y) in enumerate(pos):
         b.button(ch, p, on, off, k + 1, len(p.choices), x, y, momentary=True)
-    b.cap(ch, SX + 18, TOP + 516, "MPC PADS 1-16 PLAY THE BEATBOX SQUARES; OTHER DRUM KEYS: GM", 12, QUIET, "l", 0.1)
-    b.cap(ch, SX + 18, TOP + 538, "C3 AND UP HUM TWO OCTAVES DOWN", 12, QUIET, "l", 0.1)
+    b.cap(ch, SX + 18, TOP + 516, "MPC PADS 1-16 PLAY THE BEATBOX SQUARES (PAD 1 NOTE)", 12, QUIET, "l", 0.1)
+    b.cap(ch, SX + 18, TOP + 538, "OTHER KEYS: GM DRUMS BELOW C3, HUMS FROM C3 UP", 12, QUIET, "l", 0.1)
 
 
 def steps_block(b, ch):

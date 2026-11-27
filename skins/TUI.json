@@ -3123,6 +3123,59 @@
                     }
                 },
                 {
+                    "key": "chimButton chip_learn_pad_1_128_on.png chip_learn_pad_1_128_off.png 114 115",
+                    "value": {
+                        "version": 2,
+                        "actions": [],
+                        "backgroundData": {
+                            "version": 1,
+                            "focussed": {
+                                "version": 1,
+                                "colour": "00000000",
+                                "image": ""
+                            },
+                            "unfocussed": {
+                                "version": 1,
+                                "colour": "00000000",
+                                "image": ""
+                            }
+                        },
+                        "ignoreMousePresses": false,
+                        "disableCoarseDataWheel": false,
+                        "componentsData": [
+                            {
+                                "version": 2,
+                                "componentData": {
+                                    "version": 1,
+                                    "name": "b",
+                                    "type": "Button",
+                                    "data": {
+                                        "version": 2,
+                                        "onImage": "chip_learn_pad_1_128_on.png",
+                                        "offImage": "chip_learn_pad_1_128_off.png",
+                                        "buttonId": 114,
+                                        "numButtonsInGroup": 115,
+                                        "handleName": "Data",
+                                        "gestureBehaviour": "Instant"
+                                    }
+                                },
+                                "handle remapping": {
+                                    "version": 1,
+                                    "map": []
+                                },
+                                "bounds": {
+                                    "version": 1,
+                                    "acceptsHWFocus": "No",
+                                    "showWhenDataModelInvalid": "Show",
+                                    "whenVisible": "Always",
+                                    "boundsType": "Absolute",
+                                    "bounds": "0 0 128 34"
+                                }
+                            }
+                        ]
+                    }
+                },
+                {
                     "key": "chimStep",
                     "value": {
                         "version": 2,
@@ -23883,6 +23936,171 @@
                             "version": 2,
                             "componentData": {
                                 "version": 1,
+                                "name": "cap LAST NOTE",
+                                "type": "Image",
+                                "data": {
+                                    "version": 2,
+                                    "imageType": "Regular",
+                                    "colour": "0",
+                                    "image": "t_cap_038011.png"
+                                }
+                            },
+                            "handle remapping": {
+                                "version": 1,
+                                "map": []
+                            },
+                            "bounds": {
+                                "version": 1,
+                                "acceptsHWFocus": "No",
+                                "showWhenDataModelInvalid": "Show",
+                                "whenVisible": "Always",
+                                "boundsType": "Absolute",
+                                "bounds": "1063 159 72 22"
+                            }
+                        },
+                        {
+                            "version": 2,
+                            "componentData": {
+                                "version": 1,
+                                "name": "value Last Note",
+                                "type": "Label",
+                                "data": {
+                                    "version": 1,
+                                    "textStyle": {
+                                        "version": 1,
+                                        "font": {
+                                            "version": 1,
+                                            "name": "Roboto",
+                                            "style": "Regular",
+                                            "height": 20.0
+                                        },
+                                        "colour": "ffa9dcf8",
+                                        "justification": "right verticallyCentred",
+                                        "case": "Original"
+                                    },
+                                    "type": "Value",
+                                    "handleName": "Data"
+                                }
+                            },
+                            "handle remapping": {
+                                "version": 1,
+                                "map": [
+                                    {
+                                        "key": "Data",
+                                        "value": "Parameter 85"
+                                    }
+                                ]
+                            },
+                            "bounds": {
+                                "version": 1,
+                                "acceptsHWFocus": "No",
+                                "showWhenDataModelInvalid": "Show",
+                                "whenVisible": "Always",
+                                "boundsType": "Absolute",
+                                "bounds": "1140 156 112 26"
+                            }
+                        },
+                        {
+                            "version": 2,
+                            "componentData": {
+                                "version": 1,
+                                "name": "cap PAD 1",
+                                "type": "Image",
+                                "data": {
+                                    "version": 2,
+                                    "imageType": "Regular",
+                                    "colour": "0",
+                                    "image": "t_cap_aa10a3.png"
+                                }
+                            },
+                            "handle remapping": {
+                                "version": 1,
+                                "map": []
+                            },
+                            "bounds": {
+                                "version": 1,
+                                "acceptsHWFocus": "No",
+                                "showWhenDataModelInvalid": "Show",
+                                "whenVisible": "Always",
+                                "boundsType": "Absolute",
+                                "bounds": "1091 189 45 22"
+                            }
+                        },
+                        {
+                            "version": 2,
+                            "componentData": {
+                                "version": 1,
+                                "name": "value Pad 1 Note",
+                                "type": "Label",
+                                "data": {
+                                    "version": 1,
+                                    "textStyle": {
+                                        "version": 1,
+                                        "font": {
+                                            "version": 1,
+                                            "name": "Roboto",
+                                            "style": "Regular",
+                                            "height": 20.0
+                                        },
+                                        "colour": "ffa9dcf8",
+                                        "justification": "right verticallyCentred",
+                                        "case": "Original"
+                                    },
+                                    "type": "Value",
+                                    "handleName": "Data"
+                                }
+                            },
+                            "handle remapping": {
+                                "version": 1,
+                                "map": [
+                                    {
+                                        "key": "Data",
+                                        "value": "Parameter 84"
+                                    }
+                                ]
+                            },
+                            "bounds": {
+                                "version": 1,
+                                "acceptsHWFocus": "No",
+                                "showWhenDataModelInvalid": "Show",
+                                "whenVisible": "Always",
+                                "boundsType": "Absolute",
+                                "bounds": "1140 186 112 26"
+                            }
+                        },
+                        {
+                            "version": 2,
+                            "componentData": {
+                                "version": 1,
+                                "name": "learn pad 1",
+                                "type": "chimButton chip_learn_pad_1_128_on.png chip_learn_pad_1_128_off.png 114 115",
+                                "data": {
+                                    "version": 1,
+                                    "handleName": "Data"
+                                }
+                            },
+                            "handle remapping": {
+                                "version": 1,
+                                "map": [
+                                    {
+                                        "key": "Data",
+                                        "value": "Parameter 84"
+                                    }
+                                ]
+                            },
+                            "bounds": {
+                                "version": 1,
+                                "acceptsHWFocus": "No",
+                                "showWhenDataModelInvalid": "Hide",
+                                "whenVisible": "Always",
+                                "boundsType": "Absolute",
+                                "bounds": "1124 220 128 34"
+                            }
+                        },
+                        {
+                            "version": 2,
+                            "componentData": {
+                                "version": 1,
                                 "name": "edge",
                                 "type": "Image",
                                 "data": {
@@ -28149,13 +28367,13 @@
                             "version": 2,
                             "componentData": {
                                 "version": 1,
-                                "name": "cap MPC PADS 1-16 PLAY THE BEATBOX SQUARES; OTHER DRUM KEYS: GM",
+                                "name": "cap MPC PADS 1-16 PLAY THE BEATBOX SQUARES (PAD 1 NOTE)",
                                 "type": "Image",
                                 "data": {
                                     "version": 2,
                                     "imageType": "Regular",
                                     "colour": "0",
-                                    "image": "t_cap_d1521c.png"
+                                    "image": "t_cap_f30a32.png"
                                 }
                             },
                             "handle remapping": {
@@ -28168,20 +28386,20 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "691 563 415 23"
+                                "bounds": "691 563 358 23"
                             }
                         },
                         {
                             "version": 2,
                             "componentData": {
                                 "version": 1,
-                                "name": "cap C3 AND UP HUM TWO OCTAVES DOWN",
+                                "name": "cap OTHER KEYS: GM DRUMS BELOW C3, HUMS FROM C3 UP",
                                 "type": "Image",
                                 "data": {
                                     "version": 2,
                                     "imageType": "Regular",
                                     "colour": "0",
-                                    "image": "t_cap_6107e1.png"
+                                    "image": "t_cap_866953.png"
                                 }
                             },
                             "handle remapping": {
@@ -28194,7 +28412,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "691 585 222 22"
+                                "bounds": "691 585 328 23"
                             }
                         },
                         {
@@ -29450,6 +29668,61 @@
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
                                 "bounds": "344 354 160 134"
+                            }
+                        },
+                        {
+                            "version": 2,
+                            "componentData": {
+                                "version": 1,
+                                "name": "cap PAD 1 NOTE",
+                                "type": "Image",
+                                "data": {
+                                    "version": 2,
+                                    "imageType": "Regular",
+                                    "colour": "0",
+                                    "image": "t_cap_a33c88.png"
+                                }
+                            },
+                            "handle remapping": {
+                                "version": 1,
+                                "map": []
+                            },
+                            "bounds": {
+                                "version": 1,
+                                "acceptsHWFocus": "No",
+                                "showWhenDataModelInvalid": "Show",
+                                "whenVisible": "Always",
+                                "boundsType": "Absolute",
+                                "bounds": "373 486 101 26"
+                            }
+                        },
+                        {
+                            "version": 2,
+                            "componentData": {
+                                "version": 1,
+                                "name": "Pad 1 Note",
+                                "type": "chimKnob full 160 134 3 knob overlay",
+                                "data": {
+                                    "version": 1,
+                                    "handleName": "Data"
+                                }
+                            },
+                            "handle remapping": {
+                                "version": 1,
+                                "map": [
+                                    {
+                                        "key": "Data",
+                                        "value": "Parameter 84"
+                                    }
+                                ]
+                            },
+                            "bounds": {
+                                "version": 1,
+                                "acceptsHWFocus": "Yes",
+                                "showWhenDataModelInvalid": "Hide",
+                                "whenVisible": "Always",
+                                "boundsType": "Absolute",
+                                "bounds": "344 488 160 134"
                             }
                         },
                         {

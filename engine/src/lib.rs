@@ -101,7 +101,9 @@ pub mod p {
     pub const TYPE_INTO: usize = 70; // 0 speech, 1 lyrics
     pub const TYPE_SLOT: usize = 71; // 0..7
     pub const KEY: usize = 72; // momentary: 0 none, then texts::TextBank::key's keys
-    pub const COUNT: usize = 73;
+    // 73..83: the screen's read-only displays and the typing cursor (the C++ side's; ignored here)
+    pub const PAD_NOTES: usize = 84; // Beatbox: pad 1's note 0..=PAD_BASE_MAX (chromatic), PAD_NOTES_CLASSIC or PAD_NOTES_LEARN
+    pub const COUNT: usize = 85;
 }
 
 const MODE_SING: i32 = 0;
@@ -137,10 +139,34 @@ const SPEECH_LEAD: f64 = 0.03;
 /// Beatbox: notes from this one up hum, this many semitones down; a hum's tag and longest length;
 /// a pad hit's length (s). As CHIMERA's plugin.
 const HUM_FROM: u8 = 60;
-/// The MPC's pads 1-16 in Beatbox: notes 36-51 (the program's Note Mapping set to Chromatic C1)
-/// each play the sound of the BEATBOX square with the same number. Other keys below C3 keep the
-/// General MIDI drum map.
+/// The MPC's pads 1-16 in Beatbox each play the sound of the BEATBOX square with the same number.
+/// Which notes the pads send depends on the plugin track's Pad Perform settings and the pad bank,
+/// so Pad 1 Note (p::PAD_NOTES) says it: a chromatic layout from that note (36, Chromatic C1, by
+/// default), the classic MPC layout, or Learn (the next note in Beatbox is pad 1's). Pad notes
+/// come first; other keys below C3 keep the General MIDI drum map, and keys from C3 up hum.
 pub const PAD_NOTE_FIRST: u8 = 36;
+/// Pad 1 Note's highest chromatic start (pad 16 is then note 127), and its last two choices.
+pub const PAD_BASE_MAX: u8 = 112;
+pub const PAD_NOTES_CLASSIC: u8 = 113;
+pub const PAD_NOTES_LEARN: u8 = 114;
+/// The classic MPC note map (Akai's "Classic MPC" pad note preset, the MPC 3000 / 2000 drum
+/// layout), pads A01-A16. A learned pad 1 sending note 37 picks it.
+pub const CLASSIC_PADS: [u8; 16] = [37, 36, 42, 82, 40, 38, 46, 44, 48, 47, 45, 43, 49, 55, 51, 53];
+
+/// The BEATBOX square (0..16) a note plays with Pad 1 Note at `setting`, if it is a pad's.
+pub fn pad_square(note: u8, setting: u8) -> Option<usize> {
+    match setting {
+        0..=PAD_BASE_MAX => (setting..setting + STEPS as u8).contains(&note).then(|| (note - setting) as usize),
+        PAD_NOTES_CLASSIC => CLASSIC_PADS.iter().position(|&n| n == note),
+        _ => None,
+    }
+}
+
+/// Pad 1 Note's setting when pad 1 sends `note`: 37 (classic MPC pad A01) is the classic layout,
+/// any other note starts a chromatic one (at most PAD_BASE_MAX).
+pub fn learned_pad_notes(note: u8) -> u8 {
+    if note == CLASSIC_PADS[0] { PAD_NOTES_CLASSIC } else { note.min(PAD_BASE_MAX) }
+}
 /// Beatbox while the MPC's sequence runs: every hit lands exactly this long after its point on
 /// the timeline (the steps followed from the host, pads and drum keys alike), and the plugin
 /// reports it as its latency so the MPC can line the voice up with its other tracks. A mouth
@@ -321,6 +347,11 @@ pub struct ChimeraMpc {
     /// the BEATBOX square last heard (1..16: a pad hit, or the beat reaching that step) and a count
     step_lit: i32,
     step_serial: i32,
+    /// the last note played (any mode; -1 none) and a count of notes, for the screen
+    last_note: i32,
+    note_serial: i32,
+    /// Pad 1 Note learned while the parameter says Learn (the plugin then writes it there)
+    pad_learned: Option<u8>,
     hit_serial: i32,
     /// the voice clock up to which the sequencer's hits have been looked at
     hit_clock: f64,
@@ -406,6 +437,9 @@ impl ChimeraMpc {
             hit_pad: 0,
             step_lit: 0,
             step_serial: 0,
+            last_note: -1,
+            note_serial: 0,
+            pad_learned: None,
             hit_serial: 0,
             hit_clock: 0.0,
             base_gain,
@@ -875,6 +909,10 @@ impl ChimeraMpc {
         if changed(p::BREATHE) || changed(p::MODE) {
             self.update_gate();
         }
+        if changed(p::PAD_NOTES) {
+            // a new setting (Learn picked again, or the learned one written back) starts over
+            self.pad_learned = None;
+        }
         // the keyboard types only while the MPC's sequence is stopped: Key is automatable (the MPC
         // takes screen taps only on such parameters), so taps recorded as automation would type
         // again at every pass of the sequence
@@ -1025,8 +1063,16 @@ impl ChimeraMpc {
 
     // --- notes
 
+    /// Pad 1 Note now: the parameter, or what Learn learned while it still says Learn.
+    fn pad_notes(&self) -> u8 {
+        let s = (self.params[p::PAD_NOTES].round().max(0.0) as u8).min(PAD_NOTES_LEARN);
+        if s == PAD_NOTES_LEARN { self.pad_learned.unwrap_or(s) } else { s }
+    }
+
     fn note_on(&mut self, note: u8, velocity: u8) {
         self.apply_params();
+        self.last_note = note as i32;
+        self.note_serial = self.note_serial.wrapping_add(1);
         match self.mode {
             MODE_SING => {
                 self.singer.delay = self.sing_delay();
@@ -1038,20 +1084,25 @@ impl ChimeraMpc {
             }
             MODE_BEATBOX => {
                 let accent = (velocity as f64 / 100.0).clamp(0.4, 1.25);
-                if note >= HUM_FROM {
+                let mut pads = self.pad_notes();
+                if pads == PAD_NOTES_LEARN {
+                    // Learn: this note is pad 1's, and plays square 1
+                    pads = learned_pad_notes(note);
+                    self.pad_learned = Some(pads);
+                }
+                if let Some(i) = pad_square(note, pads) {
+                    // a pad: its square lights, and plays the sound in it (a rest stays silent)
+                    self.show_step(i);
+                    if let Some(s) = self.beat_step(i) {
+                        self.beat_hit(s.id.as_str(), accent);
+                    }
+                } else if note >= HUM_FROM {
                     self.remove_hum(note);
                     if self.n_hums < MAX_KEYS {
                         self.hums[self.n_hums] = note;
                         self.n_hums += 1;
                     }
                     self.start_hum(note, accent);
-                } else if (PAD_NOTE_FIRST..PAD_NOTE_FIRST + STEPS as u8).contains(&note) {
-                    // a pad: its square lights, and plays the sound in it (a rest stays silent)
-                    let i = (note - PAD_NOTE_FIRST) as usize;
-                    self.show_step(i);
-                    if let Some(s) = self.beat_step(i) {
-                        self.beat_hit(s.id.as_str(), accent);
-                    }
                 } else if let Some(id) = drum_pad(note) {
                     self.beat_hit(id, accent);
                 }
@@ -1080,7 +1131,8 @@ impl ChimeraMpc {
             // a line is a one-shot: it ends by itself, or when the next one cuts it
             MODE_SPEAK => {}
             MODE_BEATBOX => {
-                if note < HUM_FROM {
+                // only hums are held; a pad's note (even from C3 up) ends nothing
+                if note < HUM_FROM || !self.hums[..self.n_hums].contains(&note) {
                     return;
                 }
                 let was_top = self.n_hums > 0 && self.hums[self.n_hums - 1] == note;
@@ -1279,6 +1331,7 @@ fn defaults() -> [f32; p::COUNT] {
     d[p::PLAY_BEAT] = 0.0;
     d[p::STEP_1..p::STEP_1 + STEPS].copy_from_slice(&steps);
     d[p::PAD] = 0.0;
+    d[p::PAD_NOTES] = PAD_NOTE_FIRST as f32;
     d
 }
 
@@ -1671,6 +1724,25 @@ pub extern "C" fn cm_step_lit(h: *mut ChimeraMpc, out: *mut i32) {
         unsafe {
             *out = e.step_lit;
             *out.add(1) = e.step_serial;
+        }
+    });
+}
+
+/// The notes, for the screen and for Learn: `out[0]` the last note played (0..127, -1 none),
+/// `out[1]` a count that moves at every note, `out[2]` the Pad 1 Note setting learned while the
+/// parameter says Learn (-1 otherwise: the plugin writes it into the parameter). Cheap; once a block.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_pad_notes(h: *mut ChimeraMpc, out: *mut i32) {
+    if out.is_null() {
+        return;
+    }
+    guarded(h, |e| {
+        let learned = if e.params[p::PAD_NOTES].round() as i32 == PAD_NOTES_LEARN as i32 { e.pad_learned.map_or(-1, |s| s as i32) } else { -1 };
+        // SAFETY: the caller gives room for 3 values
+        unsafe {
+            *out = e.last_note;
+            *out.add(1) = e.note_serial;
+            *out.add(2) = learned;
         }
     });
 }

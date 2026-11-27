@@ -79,9 +79,13 @@ void cm_face_rest(int* out6);
 // A tap on a momentary control: parameter index (Key, Pad, Consonant or Speak) and the step it was
 // set to. The audio thread; those parameters then go to cm_set_params as 0.
 void cm_tap(ChimeraMpc* engine, int index, int value);
-// The BEATBOX square last heard into out[0] (0 none, 1..16: a pad hit, notes 36-51, or the beat
-// reaching that step), and a count that moves at every one into out[1].
+// The BEATBOX square last heard into out[0] (0 none, 1..16: a pad hit, as Pad 1 Note maps the
+// notes, or the beat reaching that step), and a count that moves at every one into out[1].
 void cm_step_lit(ChimeraMpc* engine, int* out2);
+// The notes: out[0] the last note played (0..127, -1 none), out[1] a count that moves at every
+// note, out[2] the Pad 1 Note setting Learn learned while the parameter says Learn (else -1: the
+// plugin writes it into the parameter). Once a block.
+void cm_pad_notes(ChimeraMpc* engine, int* out3);
 // Beatbox's latency while the sequence runs, in seconds (engine/src/lib.rs BEAT_LATENCY): the
 // plugin reports it in Beatbox mode.
 double cm_beat_latency(void);

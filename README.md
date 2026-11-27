@@ -128,13 +128,18 @@ A 16-step pattern of beatbox sounds, every one of them made by the mouth.
   **Your Beat**.
 - **Play Beat** runs it on its own tempo. With **Follow Host** on, it plays along with the MPC's
   sequencer while that runs.
-- The MPC's pads 1-16 (notes 36-51: set the track's Note Mapping to Chromatic C1) each play the sound in
-  the BEATBOX square with the same number, and the square lights up. The beat lights its squares as it
-  plays them.
+- The MPC's pads 1-16 each play the sound in the BEATBOX square with the same number, and the square
+  lights up. The beat lights its squares as it plays them.
 - The squares are laid out as the MPC's pads, 1-4 on the bottom row and 13-16 on top, and Q-Link n turns
   square n.
+- **Pad 1 Note** (top right of BEATBOX, and a knob on KIT) is the note pad 1 sends; pads 2-16 follow a
+  semitone apart. It starts at 36 (C1), the MPC's Chromatic C1 layout. **Classic** is the classic MPC
+  layout (pad 1 sends 37, pad 2 36, pad 3 42, pad 4 82, and on).
+- If the pads light the wrong squares, tap **LEARN PAD 1**, then pad 1. That note becomes Pad 1 Note
+  (37 picks Classic), and the tap plays square 1.
+- **LAST NOTE** shows the note last played, so one tap on a pad shows the note it sends.
 - Other keys below C3 hit drum sounds (General MIDI's drum map), and keys from C3 up hum two octaves
-  lower. **Pad** hits a sound without a key.
+  lower; the pads' 16 notes play their squares first. **Pad** hits a sound without a key.
 - **Mic FX** is CHIMERA's close-mic sound.
 
 | | | | | | | | | | | |
@@ -204,8 +209,8 @@ profile.
 | **VOWEL**<br><sub>press PLAY again</sub> | **VOWEL** Front · Open · Soft Palate · Rounding<br>**TONGUE** Tongue Fwd · Tongue Up · Tip Fwd · Tip Up<br>**MORE** Tongue Root · Tip Curl · Glide · Vib Rate<br>**VOICE** Pitch · Breath · Pressed · Bright | the vowel chart: drag to set Front and Open |
 | **SPEAK** | **SPEAK** Speech Rate · Start Line · Speech · IPA<br>**VOICE** Breath · Pressed · Bright · Glide<br>**TONE** Breathy · Rough · Fry · Ring<br>**SHAPE** Jaw · Lips Open · Larynx · Soft Palate | the vocal tract |
 | **SOUNDS**<br><sub>press SPEAK again</sub> | as SPEAK | the consonant buttons (tap one to say it) and the vowel around it |
-| **BEATBOX** | the 16 steps, laid out as the MPC's pads | the vocal tract, the beat's name and tempo |
-| **KIT**<br><sub>press BEATBOX again</sub> | **BEAT** Beat · Tempo · Swing · Mic FX<br>**HUM VOICE** Breath · Pressed · Bright · Glide<br>**TRANSPORT** Follow Host · Play Beat · Gain | the ten pads |
+| **BEATBOX** | the 16 steps, laid out as the MPC's pads | the vocal tract, the beat's name and tempo, the last note, Pad 1 Note and LEARN PAD 1 |
+| **KIT**<br><sub>press BEATBOX again</sub> | **BEAT** Beat · Tempo · Swing · Mic FX<br>**HUM VOICE** Breath · Pressed · Bright · Glide<br>**TRANSPORT** Follow Host · Play Beat · Gain · Pad 1 Note | the ten pads |
 | **WORDS**<br><sub>function key 5</sub> | one row: Type Into · Type Slot · Speech Rate · Start Line | the text being typed, with a full-width keyboard below |
 | **BODY**<br><sub>function key 6</sub> | **BODY** Body · Female · Child · Gain<br>**SETUP** MPE · Restart · Whisper · Breathe | the vocal tract and the credit; the body chips are in the top bar |
 
@@ -275,8 +280,9 @@ with the other tracks.
    drive. An SD card works.
 2. The MPC needs **MPC OS 3.10.1 or later**, with **Preferences > Enhancements (Beta) > Enable
    Enhancements** and **External Plugin Support** turned on.
-3. Load CHIMERA MPC as the plugin on a track. For the pads in Beatbox, set the track's Note Mapping to
-   Chromatic C1.
+3. Load CHIMERA MPC as the plugin on a track. For the pads in Beatbox, open the track's Pad Perform
+   (Shift + 16 Level on an MPC One or Live), set Type to Custom and pick the Chromatic C1 preset, on pad
+   bank A. Or keep the track's pads as they are: tap **LEARN PAD 1** on the BEATBOX page, then pad 1.
 
 ## Made to fit a 32-bit MPC
 
