@@ -350,7 +350,17 @@ Measured on an MPC One+, speaking, as a share of a 128-frame block:
 <summary><b>Build from source</b></summary>
 <br>
 
-CHIMERA MPC builds with the MPC Plugin SDK. From the SDK folder:
+CHIMERA MPC builds with the MPC Plugin SDK, against CHIMERA's engine with the changes for the MPC: the
+`mpc-opt` branch of [anthonytheinventor/chimera-vocal-synth](https://github.com/anthonytheinventor/chimera-vocal-synth/tree/mpc-opt),
+a fork of CHIMERA. Put this project in the SDK's `plugins/` folder and the fork beside the SDK folder, so
+the engine finds it at `../../../chimera-vocal-synth`:
+
+```
+git clone -b mpc-opt https://github.com/anthonytheinventor/chimera-vocal-synth.git
+git clone https://github.com/anthonytheinventor/chimera-mpc.git "mpc-plugin-builder-sdk/plugins/CHIMERA MPC"
+```
+
+Then, from the SDK folder:
 
 ```
 python "plugins/CHIMERA MPC/build_chimera.py"
@@ -365,8 +375,7 @@ rustup +nightly target add armv7-unknown-linux-gnueabihf
 ```
 
 The 32-bit build uses nightly Rust because its vector code (NEON intrinsics) is not in stable Rust yet
-on 32-bit ARM. The engine is built from the `mpc-opt` branch of a CHIMERA checkout at
-`../../../chimera-vocal-synth`.
+on 32-bit ARM.
 
 - `tools/make_skin.py` draws the screen (`skins/`, with previews in `build/preview/`).
 - `tools/make_readme_images.py` redraws the pictures in this README with the skin's own drawing code
