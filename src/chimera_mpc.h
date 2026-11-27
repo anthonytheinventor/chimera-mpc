@@ -85,6 +85,9 @@ void cm_step_lit(ChimeraMpc* engine, int* out2);
 // Beatbox's latency while the sequence runs, in seconds (engine/src/lib.rs BEAT_LATENCY): the
 // plugin reports it in Beatbox mode.
 double cm_beat_latency(void);
+// The typing cursor: characters before the end of the slot being typed (0: at the end). The audio
+// thread, once a block.
+void cm_text_cursor(ChimeraMpc* engine, int from_end);
 int cm_failed(const ChimeraMpc* engine);
 
 #ifdef __cplusplus

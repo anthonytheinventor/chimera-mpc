@@ -374,6 +374,8 @@ pub struct ChimeraMpc {
     preview_len: usize,
     preview_serial: u32,
     preview_dirty: bool,
+    /// the typing cursor, in characters before the end of the slot (0: at the end)
+    text_cursor: usize,
     failed: bool,
 }
 
@@ -442,6 +444,7 @@ impl ChimeraMpc {
             preview_len: 0,
             preview_serial: 0,
             preview_dirty: true,
+            text_cursor: 0,
             failed: false,
         };
         e.apply_params();
@@ -913,10 +916,10 @@ impl ChimeraMpc {
         let Ok(mut b) = self.texts.try_lock() else { return };
         let (t, s) = ((self.params[p::TYPE_INTO].round().max(0.0) as usize).min(1), (self.params[p::TYPE_SLOT].round().max(0.0) as usize).min(SLOTS - 1));
         for i in 0..self.n_pending {
-            b.key(t, s, self.pending_keys[i] as usize);
+            b.key(t, s, self.pending_keys[i] as usize, self.text_cursor);
         }
         self.n_pending = 0;
-        self.preview_len = b.preview(t, s, &mut self.preview);
+        self.preview_len = b.preview(t, s, self.text_cursor, &mut self.preview);
         drop(b);
         self.preview_dirty = false;
         self.preview_serial = self.preview_serial.wrapping_add(1);
@@ -1668,6 +1671,19 @@ pub extern "C" fn cm_step_lit(h: *mut ChimeraMpc, out: *mut i32) {
         unsafe {
             *out = e.step_lit;
             *out.add(1) = e.step_serial;
+        }
+    });
+}
+
+/// The typing cursor: how many characters before the end of the slot the keys type (0: at the
+/// end). The audio thread, once a block; a move redraws the preview.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_text_cursor(h: *mut ChimeraMpc, from_end: i32) {
+    let c = from_end.max(0) as usize;
+    guarded(h, |e| {
+        if e.text_cursor != c {
+            e.text_cursor = c;
+            e.preview_dirty = true;
         }
     });
 }

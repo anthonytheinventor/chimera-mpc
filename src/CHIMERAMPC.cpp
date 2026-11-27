@@ -118,6 +118,7 @@ enum ParamIndex
     kVisLarynx,                // the larynx's frame (height -1.5..1.5 cm)
     kVisSound,                 // the sound fan's brightness: 0 silent .. 5 loudest
     kStepLit,                  // read-only: the BEATBOX square to light (0 none, 1..16: a pad hit, or the beat's step)
+    kCursor,                   // WORDS: the typing cursor (the data wheel on the text box), kCursorEnd = at the end
     kNumParams
 };
 
@@ -136,6 +137,8 @@ constexpr int kMaxFaceReports = 3; // the face's layers report at most this many
 constexpr int kLookMs = 50;        // the helper thread looks this often
 constexpr int kKnobLooks = 6;      // and stays quiet this many looks after a setting moves
 constexpr int kHitLooks = 3;       // a hit's pad stays lit this many looks (about 150 ms)
+// the typing cursor's steps: kCursorEnd at the end, each step down one character further back
+constexpr int kCursorEnd = 600;   // engine/src/texts.rs TEXT_CAP (a slot's most characters)
 constexpr int kResendEvery = 10;   // a new face frame is reported again every 10 looks (0.5 s)
 constexpr int kResendLooks = 60;   // for 60 looks (3 s) after it changed
 
@@ -260,6 +263,10 @@ public:
         mpc::Param stepLit = mpc::choiceParam("step_lit", "Step Lit", {"-", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"}, 0);
         stepLit.automatable = false;
         addParam(stepLit);
+        // the typing cursor: one step per character, so the data wheel moves it a character a click
+        std::vector<std::string> cursorSteps;
+        for (int i = 0; i <= kCursorEnd; ++i) cursorSteps.push_back(i == kCursorEnd ? "End" : "-" + std::to_string(kCursorEnd - i));
+        addParam(mpc::choiceParam("cursor", "Cursor", cursorSteps, kCursorEnd));
         texts_ = cm_texts_new();
 
         // Built-in programs: voices only. Each sets parameters 0-13 (Gain, the voice source, the
@@ -362,6 +369,7 @@ public:
         padSeen_ = false;
         beatSeen_ = false;
         slotsSeen_ = false;
+        lastTyping_ = -1;   // a load's slot and cursor are taken as they are
         hitDark_.store(true, std::memory_order_release);   // the helper thread darkens the pads
         // a state load sets the momentary controls too (to whatever was saved): those are not taps.
         // reset() runs before the next block after a load (or on resume), so the queue is cleared
@@ -396,6 +404,10 @@ public:
         for (int i : {kKey, kPad, kConsonant, kSpeak}) v[i] = 0.0f;   // they come as taps (below)
         cm_set_params(e, v, kEngineParams);
         if (settle_.exchange(false, std::memory_order_acq_rel)) cm_settle(e);
+        // the typing cursor: back to the end when another slot (or Sing / Speak) is picked
+        const int typing = getInt(kTypeInto) * 16 + getInt(kTypeSlot);
+        if (typing != lastTyping_) { if (lastTyping_ >= 0) set(kCursor, (float)kCursorEnd); lastTyping_ = typing; }
+        cm_text_cursor(e, kCursorEnd - getInt(kCursor));
         // the taps caught since the last block, in order
         // (the reader follows the write count: a slot left empty, by a tap dropped from a full
         // queue, is passed over instead of holding up the ones after it)
@@ -763,6 +775,7 @@ private:
     std::atomic<bool> settle_{false};
     std::atomic<bool> hitDark_{false};
     int latencyTold_ = 0;   // the helper thread's
+    int lastTyping_ = -1;   // the audio thread's: Type Into and Type Slot as last seen
     static constexpr int kTapQueue = 64;
     static int tapSlot(int index) { return index == kKey ? 0 : index == kPad ? 1 : index == kConsonant ? 2 : 3; }
     std::atomic<int32_t> tapQueue_[kTapQueue] = {};

@@ -578,12 +578,13 @@ fn breathe_off_in_play_stops_the_voice() {
 #[test]
 fn a_tap_types_even_when_the_key_never_reaches_a_block() {
     let mut r = Rig::new();
+    r.wait_for_lyrics(); // the worker has filled the bank
     r.render(0.3);
     let mut buf = [0u8; 64];
     let before = cm_text_preview(r.h, buf.as_mut_ptr(), 64);
     // the plugin hands the tap over directly; the Key parameter itself stays 0
     cm_tap(r.h, p::KEY as i32, key_of('h') as i32);
-    r.render(0.05);
+    r.render(0.2);
     let after = cm_text_preview(r.h, buf.as_mut_ptr(), 64);
     assert_ne!(before, after, "the tap did not type");
     let n = buf.iter().position(|&b| b == 0).unwrap_or(64);
@@ -989,4 +990,39 @@ fn a_body_change_keeps_the_next_line() {
     let changed = speak_two_lines(true);
     eprintln!("plain {plain:?}, with a body change {changed:?}");
     assert!((changed.1 - plain.1).abs() < 0.3, "after a body change the second note said another line: {changed:?} vs {plain:?}");
+}
+
+#[test]
+fn the_cursor_moves_where_keys_type_and_delete() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 2.0);
+    r.wait_for_lyrics();
+    r.set(p::TYPE_INTO, 0.0);
+    r.set(p::TYPE_SLOT, 2.0);
+    let preview = |r: &mut Rig| {
+        r.render(0.01);
+        let mut buf = [0u8; 64];
+        cm_text_preview(r.h, buf.as_mut_ptr(), 64);
+        std::ffi::CStr::from_bytes_until_nul(&buf).unwrap().to_str().unwrap().to_string()
+    };
+    r.render(0.05); // the slot settings reach the engine before the taps
+    cm_tap(r.h, p::KEY as i32, 35); // Clear
+    for c in "helo".chars() {
+        cm_tap(r.h, p::KEY as i32, key_of(c) as i32);
+    }
+    assert_eq!(preview(&mut r), "helo_");
+    // one character back: between "hel" and "o"; type "l"
+    cm_text_cursor(r.h, 1);
+    assert_eq!(preview(&mut r), "hel_o");
+    cm_tap(r.h, p::KEY as i32, key_of('l') as i32);
+    assert_eq!(preview(&mut r), "hell_o", "typed at the cursor");
+    // Del takes the character before the cursor
+    cm_tap(r.h, p::KEY as i32, 33);
+    cm_tap(r.h, p::KEY as i32, 33);
+    assert_eq!(preview(&mut r), "he_o", "deleted before the cursor");
+    // past the start: at the start
+    cm_text_cursor(r.h, 50);
+    assert_eq!(preview(&mut r), "_heo");
+    cm_text_cursor(r.h, 0);
+    assert_eq!(preview(&mut r), "heo_");
 }

@@ -22,6 +22,8 @@ pub const KEY_LINE: usize = 34;
 pub const KEY_CLEAR: usize = 35;
 /// Characters of a slot the preview shows.
 pub const PREVIEW_CHARS: usize = 28;
+/// Characters after the cursor the preview keeps in view (when the text runs on past it).
+const PREVIEW_AFTER: usize = 8;
 
 #[derive(Clone, Copy)]
 pub struct Slot {
@@ -53,21 +55,41 @@ impl Slot {
         self.len = n;
     }
 
-    fn push(&mut self, b: u8) {
-        if self.len < TEXT_CAP {
-            self.bytes[self.len] = b;
+    /// The byte position `from_end` characters before the end (the cursor; clamped to the start).
+    fn pos_from_end(&self, from_end: usize) -> usize {
+        let mut pos = self.len;
+        for _ in 0..from_end {
+            if pos == 0 {
+                break;
+            }
+            pos -= 1;
+            while pos > 0 && self.bytes[pos] & 0xC0 == 0x80 {
+                pos -= 1;
+            }
+        }
+        pos
+    }
+
+    /// Put byte `b` (ASCII) in at byte position `pos`.
+    fn insert(&mut self, pos: usize, b: u8) {
+        if self.len < TEXT_CAP && pos <= self.len {
+            self.bytes.copy_within(pos..self.len, pos + 1);
+            self.bytes[pos] = b;
             self.len += 1;
         }
     }
 
-    /// Remove the last character (all of its bytes).
-    fn pop(&mut self) {
-        while self.len > 0 {
-            self.len -= 1;
-            if self.bytes[self.len] & 0xC0 != 0x80 {
-                break;
-            }
+    /// Take out the character before byte position `pos` (all of its bytes).
+    fn remove_before(&mut self, pos: usize) {
+        if pos == 0 || pos > self.len {
+            return;
         }
+        let mut start = pos - 1;
+        while start > 0 && self.bytes[start] & 0xC0 == 0x80 {
+            start -= 1;
+        }
+        self.bytes.copy_within(pos..self.len, start);
+        self.len -= pos - start;
     }
 }
 
@@ -90,17 +112,20 @@ pub fn new_bank() -> Texts {
 }
 
 impl TextBank {
-    /// Type key `k` (the Key parameter's step) into a slot. Allocation-free.
-    pub fn key(&mut self, target: usize, slot: usize, k: usize) {
+    /// Type key `k` (the Key parameter's step) into a slot at the cursor, `from_end` characters
+    /// before the end (0: at the end). Typing and Del keep the cursor where it is counted from the
+    /// end. Allocation-free.
+    pub fn key(&mut self, target: usize, slot: usize, k: usize, from_end: usize) {
         let (t, s) = (target.min(1), slot.min(SLOTS - 1));
         let lines = target == TARGET_SPEECH;
         let sl = &mut self.slots[t][s];
+        let pos = sl.pos_from_end(from_end);
         match k {
-            1..=26 => sl.push(b'a' + (k - 1) as u8),
-            27..=32 => sl.push(PUNCT[k - 27]),
-            KEY_DEL => sl.pop(),
+            1..=26 => sl.insert(pos, b'a' + (k - 1) as u8),
+            27..=32 => sl.insert(pos, PUNCT[k - 27]),
+            KEY_DEL => sl.remove_before(pos),
             // a new line: in Speech, what the next note says; in lyrics, a space
-            KEY_LINE => sl.push(if lines { b'\n' } else { b' ' }),
+            KEY_LINE => sl.insert(pos, if lines { b'\n' } else { b' ' }),
             KEY_CLEAR => sl.len = 0,
             _ => return,
         }
@@ -108,32 +133,37 @@ impl TextBank {
         self.generation[t] += 1;
     }
 
-    /// The end of a slot as one line ("/" between its lines) with a "_" cursor, into `out`;
-    /// returns its length. Allocation-free.
-    pub fn preview(&self, target: usize, slot: usize, out: &mut [u8; 64]) -> usize {
+    /// The slot around its cursor (`from_end` characters before the end) as one line ("/"
+    /// between its lines) with "_" at the cursor, into `out`; returns its length. Up to
+    /// PREVIEW_CHARS characters: a few after the cursor, the rest before it. Allocation-free.
+    pub fn preview(&self, target: usize, slot: usize, from_end: usize, out: &mut [u8; 64]) -> usize {
         let text = self.slots[target.min(1)][slot.min(SLOTS - 1)].as_str();
-        let mut chars: [char; PREVIEW_CHARS] = [' '; PREVIEW_CHARS];
-        let mut n = 0;
-        // the last PREVIEW_CHARS characters, a line break shown as "/"
-        for ch in text.chars().rev() {
-            if n == PREVIEW_CHARS {
-                break;
-            }
-            chars[n] = if ch == '\n' { '/' } else { ch };
-            n += 1;
-        }
+        let total = text.chars().count();
+        let at = total - from_end.min(total);
+        let after_total = total - at;
+        let before = at.min(PREVIEW_CHARS - after_total.min(PREVIEW_AFTER));
+        let after = after_total.min(PREVIEW_CHARS - before);
         let mut len = 0;
-        for ch in chars[..n].iter().rev() {
+        let mut put = |ch: char, out: &mut [u8; 64]| {
             let mut b = [0u8; 4];
             let e = ch.encode_utf8(&mut b);
-            if len + e.len() + 1 > out.len() {
-                break;
+            if len + e.len() < out.len() {
+                out[len..len + e.len()].copy_from_slice(e.as_bytes());
+                len += e.len();
             }
-            out[len..len + e.len()].copy_from_slice(e.as_bytes());
-            len += e.len();
+        };
+        for (i, ch) in text.chars().enumerate() {
+            if i == at {
+                put('_', out);
+            }
+            if i + before >= at && i < at + after {
+                put(if ch == '\n' { '/' } else { ch }, out);
+            }
         }
-        out[len] = b'_';
-        len + 1
+        if at == total {
+            put('_', out);
+        }
+        len
     }
 
     /// The typed slots, for the project: "CMT1", then per slot target, slot, length (u16 LE), text.

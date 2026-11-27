@@ -4802,6 +4802,102 @@
                     }
                 },
                 {
+                    "key": "chimTextBox",
+                    "value": {
+                        "version": 2,
+                        "actions": [
+                            {
+                                "version": 1,
+                                "onAction": "Mouse Down",
+                                "handler": "Q-Link",
+                                "handleName": "Data",
+                                "additionalData": ""
+                            }
+                        ],
+                        "backgroundData": {
+                            "version": 1,
+                            "focussed": {
+                                "version": 1,
+                                "colour": "00000000",
+                                "image": ""
+                            },
+                            "unfocussed": {
+                                "version": 1,
+                                "colour": "00000000",
+                                "image": ""
+                            }
+                        },
+                        "ignoreMousePresses": false,
+                        "disableCoarseDataWheel": false,
+                        "componentsData": [
+                            {
+                                "version": 2,
+                                "componentData": {
+                                    "version": 1,
+                                    "name": "focus",
+                                    "type": "Focus",
+                                    "data": {
+                                        "version": 1,
+                                        "backgroundColour": "164fb6f2",
+                                        "outlineColour": "ff4fb6f2",
+                                        "backgroundInset": 2.0,
+                                        "outlineThickness": 2.0
+                                    }
+                                },
+                                "handle remapping": {
+                                    "version": 1,
+                                    "map": []
+                                },
+                                "bounds": {
+                                    "version": 1,
+                                    "acceptsHWFocus": "No",
+                                    "showWhenDataModelInvalid": "Show",
+                                    "whenVisible": "WhenFocussed",
+                                    "boundsType": "Absolute",
+                                    "bounds": "0 0 676 70"
+                                }
+                            },
+                            {
+                                "version": 2,
+                                "componentData": {
+                                    "version": 1,
+                                    "name": "text",
+                                    "type": "Label",
+                                    "data": {
+                                        "version": 1,
+                                        "textStyle": {
+                                            "version": 1,
+                                            "font": {
+                                                "version": 1,
+                                                "name": "Roboto",
+                                                "style": "Light",
+                                                "height": 40.0
+                                            },
+                                            "colour": "ffeffbff",
+                                            "justification": "left verticallyCentred",
+                                            "case": "Original"
+                                        },
+                                        "type": "Value",
+                                        "handleName": "Text"
+                                    }
+                                },
+                                "handle remapping": {
+                                    "version": 1,
+                                    "map": []
+                                },
+                                "bounds": {
+                                    "version": 1,
+                                    "acceptsHWFocus": "No",
+                                    "showWhenDataModelInvalid": "Show",
+                                    "whenVisible": "Always",
+                                    "boundsType": "Absolute",
+                                    "bounds": "10 6 656 58"
+                                }
+                            }
+                        ]
+                    }
+                },
+                {
                     "key": "chimButton key_cap_on.png key_cap_off.png 17 36",
                     "value": {
                         "version": 2,
@@ -30253,23 +30349,10 @@
                             "version": 2,
                             "componentData": {
                                 "version": 1,
-                                "name": "value Typed",
-                                "type": "Label",
+                                "name": "text box",
+                                "type": "chimTextBox",
                                 "data": {
                                     "version": 1,
-                                    "textStyle": {
-                                        "version": 1,
-                                        "font": {
-                                            "version": 1,
-                                            "name": "Roboto",
-                                            "style": "Light",
-                                            "height": 40.0
-                                        },
-                                        "colour": "ffeffbff",
-                                        "justification": "left verticallyCentred",
-                                        "case": "Original"
-                                    },
-                                    "type": "Value",
                                     "handleName": "Data"
                                 }
                             },
@@ -30278,30 +30361,34 @@
                                 "map": [
                                     {
                                         "key": "Data",
+                                        "value": "Parameter 82"
+                                    },
+                                    {
+                                        "key": "Text",
                                         "value": "Parameter 73"
                                     }
                                 ]
                             },
                             "bounds": {
                                 "version": 1,
-                                "acceptsHWFocus": "No",
+                                "acceptsHWFocus": "Yes",
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "590 88 660 56"
+                                "bounds": "580 80 676 70"
                             }
                         },
                         {
                             "version": 2,
                             "componentData": {
                                 "version": 1,
-                                "name": "cap EACH LINE IS WHAT ONE NOTE SAYS.  LINE STARTS A NEW ONE, SHOWN AS /",
+                                "name": "cap TAP THE TEXT, THEN THE DATA WHEEL MOVES THE CURSOR.  LINE STARTS A NEW LINE (/)",
                                 "type": "Image",
                                 "data": {
                                     "version": 2,
                                     "imageType": "Regular",
                                     "colour": "0",
-                                    "image": "t_cap_dc6e09.png"
+                                    "image": "t_cap_385f75.png"
                                 }
                             },
                             "handle remapping": {
@@ -30314,7 +30401,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "583 155 444 23"
+                                "bounds": "584 155 522 24"
                             }
                         },
                         {

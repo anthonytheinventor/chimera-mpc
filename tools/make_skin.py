@@ -1257,8 +1257,21 @@ def words_block(b, ch):
     b.cap(ch, tx + 58, TOP + 9, "/  SLOT", 12, QUIET, "l", 0.1)
     b.label(ch, params["Type Slot"], (tx + 120, TOP + 5, 16, 20), 14.0, QUIET, "horizontallyCentred verticallyCentred", "Regular")
     b.cap(ch, tx + 140, TOP + 9, "OF 8", 12, QUIET, "l", 0.1)
-    b.label(ch, params["Typed"], (590, TOP + 36, 660, 56), 40.0, INK, "left verticallyCentred")
-    b.cap(ch, 590, TOP + 108, "EACH LINE IS WHAT ONE NOTE SAYS.  LINE STARTS A NEW ONE, SHOWN AS /", 12, QUIET, "l", 0.1)
+    # the text box: tapped, it takes the focus and the data wheel moves the typing cursor (Cursor);
+    # its label shows the typed text (Typed), the cursor as "_"
+    typed, cursor = b.ref(params["Typed"]), b.ref(params["Cursor"])
+    bw, bh = 676, 70
+
+    def box_def():
+        lab = label_data("Value", argb(INK), 40.0, "left verticallyCentred")
+        lab = G.Obj([(k, "Text" if k == "handleName" else v) for k, v in lab])
+        return G.component_definition([G.action("Mouse Down", "Q-Link", "Data", "")], [
+            focus_entry(BLUE, bw, bh),
+            G.entry("text", "Label", lab, rect_str(10, 6, bw - 20, bh - 12), "No", "Show", "Always")], "00000000")
+    dn = b.need("chimTextBox", box_def)
+    ch.append(G.entry("text box", dn, G.obj(("version", 1), ("handleName", "Data")), rect_str(580, TOP + 28, bw, bh),
+                      "Yes", "Show", "Always", remap=[("Data", cursor.handle), ("Text", typed.handle)]))
+    b.cap(ch, 590, TOP + 108, "TAP THE TEXT, THEN THE DATA WHEEL MOVES THE CURSOR.  LINE STARTS A NEW LINE (/)", 12, QUIET, "l", 0.1)
     # the keys: one shared cap pair for the letters, the letters baked under the buttons
     kp = params["Key"]
     n = len(kp.choices)
@@ -1442,7 +1455,8 @@ class Previewer:
                 ts = oget(data, "textStyle")
                 fnt = oget(ts, "font")
                 kind = oget(data, "type")
-                text = oget(data, "text", "") if kind == "Text" else self.text(handle("Data")) if kind == "Value" else (self.param(handle("Data")).name if self.param(handle("Data")) else "")
+                hn = oget(data, "handleName") or "Data"
+                text = oget(data, "text", "") if kind == "Text" else self.text(handle(hn)) if kind == "Value" else (self.param(handle(hn)).name if self.param(handle(hn)) else "")
                 if text:
                     path = ROBOTO_LIGHT if oget(fnt, "style") in ("Light", "Thin") else ROBOTO
                     f = font(path, oget(fnt, "height"))

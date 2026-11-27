@@ -42,6 +42,9 @@ transport starts.
 and for Speak **Line** starts a new line: each note says the next line. The slot starts with the line
 from the text file; what you type replaces it and is saved with the project. A moment after you stop
 typing, the next note says (or sings) the new words; **Speak** says the next line without a key.
+To fix something earlier in the text, tap the text box and turn the data wheel: the cursor (shown as
+_) moves a character at a time, and the keys type and Del deletes there. Picking another slot puts it
+back at the end.
 Type Slot and the slot that plays move together (Speech on the SPEAK page, or Lyrics on SING while
 typing for Sing), so the words on the WORDS page are the ones you hear. The keyboard types while the
 MPC's sequence is stopped, so taps recorded as automation never type again on playback.
