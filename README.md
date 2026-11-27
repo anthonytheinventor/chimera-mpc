@@ -357,7 +357,7 @@ on 32-bit ARM. The engine is built from the `mpc-opt` branch of a CHIMERA checko
 
 ## License
 
-MIT.
+MIT: see [`LICENSE`](LICENSE).
 
 - **CHIMERA** is MIT licensed, copyright Jameson Hodge. Its license is in
   [`Content/CHIMERA-LICENSE.txt`](Content/CHIMERA-LICENSE.txt).
