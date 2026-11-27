@@ -117,12 +117,13 @@ enum ParamIndex
     kVisLowerLip,              // the lower lip's frame (opening x how far forward; a strip per pair of jaw frames)
     kVisLarynx,                // the larynx's frame (height -1.5..1.5 cm)
     kVisSound,                 // the sound fan's brightness: 0 silent .. 5 loudest
+    kStepLit,                  // read-only: the BEATBOX square to light (0 none, 1..16: a pad hit, or the beat's step)
     kNumParams
 };
 
 constexpr int kEngineParams = kKey + 1;   // the engine reads 0..kKey (engine/src/lib.rs, module p)
 
-bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit || (i >= kVisJaw && i <= kVisSound); }
+bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit || (i >= kVisJaw && i <= kVisSound) || i == kStepLit; }
 
 // The momentary controls: a tap sets one and the MPC puts it back to 0 when the finger lifts, which
 // with a quick tap can happen before the next block reads it. Their taps are caught as the host
@@ -256,6 +257,9 @@ public:
             v.automatable = false;
             addParam(v);
         }
+        mpc::Param stepLit = mpc::choiceParam("step_lit", "Step Lit", {"-", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"}, 0);
+        stepLit.automatable = false;
+        addParam(stepLit);
         texts_ = cm_texts_new();
 
         // Built-in programs: voices only. Each sets parameters 0-13 (Gain, the voice source, the
@@ -442,6 +446,10 @@ public:
         for (int i = 0; i < kFaceLayers; ++i) faceNow_[i].store(layers[i], std::memory_order_relaxed);
         hitPad_.store(shown[2], std::memory_order_relaxed);
         hitCount_.store(shown[3], std::memory_order_release);
+        int step[2] = {0, 0};
+        cm_step_lit(e, step);
+        stepPad_.store(step[0], std::memory_order_relaxed);
+        stepCount_.store(step[1], std::memory_order_release);
         processed_.fetch_add(1, std::memory_order_relaxed);
         inProcess_.store(false, std::memory_order_release);
     }
@@ -498,6 +506,7 @@ private:
         int lastShown[kStrips], again[kStrips] = {};
         for (int& l : lastShown) l = -1;
         int lastHitCount = hitCount_.load(std::memory_order_acquire), shownHit = -1, hitLooks = 0;
+        int lastStepCount = stepCount_.load(std::memory_order_acquire), shownStep = -1, stepLooks = 0;
         uint32_t lastProcessed = 0;
         for (;;)
         {
@@ -513,6 +522,7 @@ private:
                 // no audio for 200 ms: say nothing to the host; a lit pad goes dark (written only,
                 // shown when the screen next reads it)
                 if (shownHit > 0) { shownHit = 0; set(kHit, 0.0f); }
+                if (shownStep > 0) { shownStep = 0; set(kStepLit, 0.0f); }
                 continue;
             }
 
@@ -576,9 +586,36 @@ private:
             // a drum hit lights its pad for a moment (reported even while knobs move: hits are taps)
             const int hits = hitCount_.load(std::memory_order_acquire);
             int lit = shownHit < 0 ? 0 : shownHit;
-            if (hitDark_.exchange(false, std::memory_order_acq_rel))
+            // after a load or reset: the pads and squares go dark, whatever the project saved
+            const bool dark = hitDark_.exchange(false, std::memory_order_acq_rel);
+            // the BEATBOX square of a pad hit or of the beat's step, lit for a moment as the pads are
+            const int steps = stepCount_.load(std::memory_order_acquire);
+            int litStep = shownStep < 0 ? 0 : shownStep;
+            if (dark)
             {
-                // after a load or reset: dark, whatever the project saved
+                lastStepCount = steps;
+                stepLooks = 0;
+                litStep = 0;
+                shownStep = -1;
+            }
+            else if (steps != lastStepCount)
+            {
+                lastStepCount = steps;
+                litStep = stepPad_.load(std::memory_order_relaxed);
+                stepLooks = kHitLooks;
+            }
+            else if (stepLooks > 0 && --stepLooks == 0)
+                litStep = 0;
+            // (held while a setting moves: the beat's steps would report several times a second
+            // during a knob sweep on BEATBOX, which can lock up the MPC's Q-Link screen)
+            if (litStep != shownStep && knobLooks == 0)
+            {
+                shownStep = litStep;
+                set(kStepLit, (float)litStep);
+                notifyHostParameterChanged(kStepLit);
+            }
+            if (dark)
+            {
                 lastHitCount = hits;
                 hitLooks = 0;
                 lit = 0;
@@ -716,7 +753,7 @@ private:
     std::atomic<uint32_t> tapWrite_{0};
     uint32_t tapRead_ = 0;   // the audio thread's
     std::atomic<int> tapLast_[4] = {};
-    std::atomic<int> velumFrame_{0}, hitPad_{0}, hitCount_{0};
+    std::atomic<int> velumFrame_{0}, hitPad_{0}, hitCount_{0}, stepPad_{0}, stepCount_{0};
     std::atomic<int> faceNow_[kFaceLayers] = {};
     int faceFrames_[kFaceLayers] = {10, 28, 18, 12, 7, 6};   // cm_face_frames
     int stripTurn_ = 0;                                 // the helper thread's

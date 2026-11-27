@@ -1206,13 +1206,14 @@ def pads_screen(b, ch):
     p = params["Pad"]
     for k, (x, y) in enumerate(pos):
         b.button(ch, p, on, off, k + 1, len(p.choices), x, y, momentary=True)
-    b.cap(ch, SX + 18, TOP + 516, "PADS: GM DRUM NOTES 35-59", 12, QUIET, "l", 0.1)
+    b.cap(ch, SX + 18, TOP + 516, "MPC PADS 1-16 PLAY THE BEATBOX SQUARES; OTHER DRUM KEYS: GM", 12, QUIET, "l", 0.1)
     b.cap(ch, SX + 18, TOP + 538, "C3 AND UP HUM TWO OCTAVES DOWN", 12, QUIET, "l", 0.1)
 
 
 def steps_block(b, ch):
-    """BEATBOX: the 4 x 4 step grid, one bar per column read top to bottom (a bank is one bar;
-    Bank Direction Column, like the Q-Link window's column of four)"""
+    """BEATBOX: the 16 steps laid out as the MPC's pads (1-4 on the bottom row, 13-16 on top), so
+    pad n plays square n and Q-Link n (Q-Links sit as the pads do) turns it; a square fills while
+    Step Lit names it (its pad hit, or the beat reaching it). Bank Direction Column."""
     params = b.params
     bounds = []
 
@@ -1221,11 +1222,17 @@ def steps_block(b, ch):
             focus_entry(AMBER, 160, 138),
             G.entry("value", "Label", label_data("Value", argb(AMBER), 60.0), rect_str(0, 32, 160, 80), "No", "Show", "Always")], "00000000")
     dn = b.need("chimStep", step_def)
+    lit_param = b.ref(params["Step Lit"])
+    if "step_lit.png" not in IMAGES:
+        im = Image.new("RGBA", (160, 138), AMBER + (70,))
+        ImageDraw.Draw(im).rectangle((0, 0, 159, 137), outline=core(AMBER) + (255,), width=2)
+        put("step_lit.png", im)
     assigned = {}
     for k in range(16):
-        c, r = divmod(k, 4)
+        c, r = k % 4, 3 - k // 4     # pad layout: step 1 bottom-left, 16 top-right
         x, y = GRID_X + c * 166, TOP + r * 144
         b.frame(ch, x, y, 160, 138, BLUE_DIM if c == 0 else FRAME)
+        ch.append(image_entry("lit %d" % (k + 1), "step_lit.png", (x, y, 160, 138), when=(k + 1, len(lit_param.choices), lit_param.handle)))
         b.cap(ch, x + 10, y + 8, "%d" % (k + 1), 15, QUIET, "l", 0.1)
         p = b.ref(params["Step %d" % (k + 1)])
         ch.append(G.entry(p.name, dn, G.obj(("version", 1), ("handleName", "Data")), rect_str(x, y, 160, 138),

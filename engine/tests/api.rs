@@ -455,12 +455,12 @@ fn drum_hits_are_reported_for_the_screen() {
     let mut shown = [0i32; 4];
     cm_display(r.h, shown.as_mut_ptr());
     let before = shown[3];
-    // a GM snare key: the snare pad (3: "Pf")
-    cm_note_on(r.h, 38, 100);
+    // a GM drum key outside the pads' notes (36-51): crash cymbal 2 -> the crash pad (9: "kch")
+    cm_note_on(r.h, 57, 100);
     r.render(0.05);
-    cm_note_off(r.h, 38);
+    cm_note_off(r.h, 57);
     cm_display(r.h, shown.as_mut_ptr());
-    assert_eq!(shown[2], 3, "the snare's pad");
+    assert_eq!(shown[2], 9, "the crash's pad");
     assert_ne!(shown[3], before, "the hit count moved");
     // the kit pad Kick (1), tapped on the screen
     r.set(p::PAD, 1.0);
@@ -703,4 +703,45 @@ fn the_face_follows_speech() {
     assert!(seen[1].len() >= 4, "the tongue barely moved while speaking: {:?}", seen[1]);
     assert!(seen[2].len() >= 2, "the lower lip stood still while speaking: {:?}", seen[2]);
     assert!(seen[3].len() >= 2, "the sound layer did not follow the speech: {:?}", seen[3]);
+}
+
+#[test]
+fn the_pads_play_the_beatbox_squares_and_light_them() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 3.0);
+    r.set(p::FOLLOW, 0.0);
+    for i in 0..16 {
+        r.set(p::STEP_1 + i, 0.0); // all rests
+    }
+    r.set(p::STEP_1, 1.0); // square 1: kick
+    r.render(0.3);
+    let mut lit = [0i32; 2];
+    // pad 1 (note 36): square 1 lights and its kick sounds
+    cm_note_on(r.h, PAD_NOTE_FIRST as i32, 110);
+    r.out.clear();
+    r.render(0.4);
+    cm_note_off(r.h, PAD_NOTE_FIRST as i32);
+    cm_step_lit(r.h, lit.as_mut_ptr());
+    assert_eq!(lit[0], 1, "square 1 lit");
+    assert!(rms(&r.out) > 0.003, "pad 1 played nothing: {}", rms(&r.out));
+    let count = lit[1];
+    // pad 6 (note 41) on a rest: square 6 lights, nothing sounds
+    r.render(0.6);
+    cm_note_on(r.h, PAD_NOTE_FIRST as i32 + 5, 110);
+    r.out.clear();
+    r.render(0.3);
+    cm_note_off(r.h, PAD_NOTE_FIRST as i32 + 5);
+    cm_step_lit(r.h, lit.as_mut_ptr());
+    assert_eq!(lit[0], 6, "square 6 lit");
+    assert_ne!(lit[1], count, "the count moved");
+    assert!(rms(&r.out) < 1e-3, "a rest square sounded: {}", rms(&r.out));
+    // the beat lights the steps it reaches, rests too
+    r.set(p::PLAY_BEAT, 1.0);
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..120 {
+        r.render(0.025);
+        cm_step_lit(r.h, lit.as_mut_ptr());
+        seen.insert(lit[0]);
+    }
+    assert!(seen.len() >= 8, "the beat lit only {seen:?}");
 }

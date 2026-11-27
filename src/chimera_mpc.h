@@ -79,6 +79,9 @@ void cm_face_rest(int* out6);
 // A tap on a momentary control: parameter index (Key, Pad, Consonant or Speak) and the step it was
 // set to. The audio thread; those parameters then go to cm_set_params as 0.
 void cm_tap(ChimeraMpc* engine, int index, int value);
+// The BEATBOX square last heard into out[0] (0 none, 1..16: a pad hit, notes 36-51, or the beat
+// reaching that step), and a count that moves at every one into out[1].
+void cm_step_lit(ChimeraMpc* engine, int* out2);
 int cm_failed(const ChimeraMpc* engine);
 
 #ifdef __cplusplus

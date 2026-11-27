@@ -27,9 +27,11 @@ CHIMERA MPC is an independent project, not made or endorsed by Jameson Hodge.
   vowels, as CHIMERA's consonant chart does; **Pad Vowel** picks the vowel around it.
 - **Beatbox**: a 16-step pattern of beatbox sounds. **Beat** picks one of CHIMERA's seven patterns
   (it fills the steps, Tempo and Swing) or keeps **Your Beat**. **Play Beat** runs it on its own
-  tempo; with **Follow Host** on, it plays along with the MPC's sequencer while that runs. Keys
-  below C3 hit drum sounds (General MIDI's drum map: kick, snare, hats, crash and more), keys from
-  C3 up hum two octaves lower, and **Pad** hits a sound without a key. **Mic FX** is CHIMERA's
+  tempo; with **Follow Host** on, it plays along with the MPC's sequencer while that runs. The
+  MPC's pads 1-16 (notes 36-51: set the track's Note Mapping to Chromatic C1) each play the sound
+  in the BEATBOX square with the same number, and the square lights up; the beat lights its squares
+  as it plays them. Other keys below C3 hit drum sounds (General MIDI's drum map), keys from C3 up
+  hum two octaves lower, and **Pad** hits a sound without a key. **Mic FX** is CHIMERA's
   close-mic sound.
 
 With **Restart** on, Sing and Speak start again from Start Syl and Start Line each time the MPC's
@@ -69,7 +71,7 @@ whether you tapped it, played its drum key, or the beat played it.
 | VOWEL (press PLAY again) | VOWEL (Front, Open, Soft Palate, Rounding); TONGUE (Tongue Fwd, Tongue Up, Tip Fwd, Tip Up); MORE (Tongue Root, Tip Curl, Glide, Vib Rate); VOICE (Pitch, Breath, Pressed, Bright) | the vowel chart: drag to set Front and Open |
 | SPEAK | SPEAK (Speech Rate, Start Line, Speech, IPA); VOICE; TONE (Breathy, Rough, Fry, Ring); SHAPE (Jaw, Lips Open, Larynx, Soft Palate) | the vocal tract |
 | SOUNDS (press SPEAK again) | as SPEAK | the consonant buttons (tap one to say it) and the vowel around it |
-| BEATBOX | the 16 steps, a column of four per bar | the vocal tract, the beat's name and tempo |
+| BEATBOX | the 16 steps, laid out as the MPC's pads (1-4 on the bottom row, 13-16 on top); Q-Link n turns square n | the vocal tract, the beat's name and tempo |
 | KIT (press BEATBOX again) | BEAT (Beat, Tempo, Swing, Mic FX); HUM VOICE; TRANSPORT (Follow Host, Play Beat, Gain) | the ten pads |
 | WORDS (function key 5) | one row: Type Into, Type Slot, Speech Rate, Start Line | the end of the text being typed, with a full-width keyboard below |
 | BODY (function key 6) | BODY (Body, Female, Child, Gain); SETUP (MPE, Restart, Whisper, Breathe) | the vocal tract and the credit; the body chips are in the top bar |

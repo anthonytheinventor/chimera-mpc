@@ -137,6 +137,10 @@ const SPEECH_LEAD: f64 = 0.03;
 /// Beatbox: notes from this one up hum, this many semitones down; a hum's tag and longest length;
 /// a pad hit's length (s). As CHIMERA's plugin.
 const HUM_FROM: u8 = 60;
+/// The MPC's pads 1-16 in Beatbox: notes 36-51 (the program's Note Mapping set to Chromatic C1)
+/// each play the sound of the BEATBOX square with the same number. Other keys below C3 keep the
+/// General MIDI drum map.
+pub const PAD_NOTE_FIRST: u8 = 36;
 const HUM_DOWN: u8 = 24;
 const HUM_TAG: f64 = -1.0;
 const HUM_LEN: f64 = 3600.0;
@@ -295,6 +299,9 @@ pub struct ChimeraMpc {
     speech_cursor: usize,
     /// the last drum sound heard (1.. STEP_IDS, for the screen's pads) and a count of hits
     hit_pad: i32,
+    /// the BEATBOX square last heard (1..16: a pad hit, or the beat reaching that step) and a count
+    step_lit: i32,
+    step_serial: i32,
     hit_serial: i32,
     /// the voice clock up to which the sequencer's hits have been looked at
     hit_clock: f64,
@@ -374,6 +381,8 @@ impl ChimeraMpc {
             speech: None,
             speech_cursor: 0,
             hit_pad: 0,
+            step_lit: 0,
+            step_serial: 0,
             hit_serial: 0,
             hit_clock: 0.0,
             base_gain,
@@ -623,6 +632,12 @@ impl ChimeraMpc {
         self.engine.voice_mut().output_gain = self.base_gain * self.gain_now;
     }
 
+    /// The screen lights BEATBOX square `i` (0..16).
+    fn show_step(&mut self, i: usize) {
+        self.step_lit = i as i32 + 1;
+        self.step_serial = self.step_serial.wrapping_add(1);
+    }
+
     /// The screen lights this sound's pad.
     fn show_hit(&mut self, id: &str) {
         if let Some(k) = STEP_IDS.iter().position(|s| *s == id) {
@@ -635,12 +650,19 @@ impl ChimeraMpc {
     fn show_beat_hits(&mut self) {
         let now = self.engine.clock();
         let beat = self.engine.beat();
-        let (mut latest, mut id) = (self.hit_clock, None);
+        let (mut latest, mut id, mut step_latest, mut step) = (self.hit_clock, None, self.hit_clock, None);
         if beat.playing || beat.following() {
             let steps = beat.steps();
             for (n, t) in beat.recent_hits() {
-                if t > self.hit_clock && t <= now && t >= latest && !steps.is_empty() {
-                    if let Some(s) = &steps[n.rem_euclid(steps.len() as i64) as usize] {
+                if t > self.hit_clock && t <= now && !steps.is_empty() {
+                    let i = n.rem_euclid(steps.len() as i64) as usize;
+                    if t >= step_latest {
+                        step_latest = t;
+                        step = Some(i);
+                    }
+                    if t >= latest
+                        && let Some(s) = &steps[i]
+                    {
                         latest = t;
                         id = STEP_IDS.iter().position(|x| *x == s.id.as_str());
                     }
@@ -651,6 +673,9 @@ impl ChimeraMpc {
         if let Some(k) = id {
             self.hit_pad = k as i32 + 1;
             self.hit_serial = self.hit_serial.wrapping_add(1);
+        }
+        if let Some(i) = step {
+            self.show_step(i % STEPS);
         }
     }
 
@@ -976,6 +1001,13 @@ impl ChimeraMpc {
                         self.n_hums += 1;
                     }
                     self.start_hum(note, accent);
+                } else if (PAD_NOTE_FIRST..PAD_NOTE_FIRST + STEPS as u8).contains(&note) {
+                    // a pad: its square lights, and plays the sound in it (a rest stays silent)
+                    let i = (note - PAD_NOTE_FIRST) as usize;
+                    self.show_step(i);
+                    if let Some(s) = self.beat_step(i) {
+                        self.beat_hit(s.id.as_str(), accent);
+                    }
                 } else if let Some(id) = drum_pad(note) {
                     self.beat_hit(id, accent);
                 }
@@ -1568,6 +1600,22 @@ pub extern "C" fn cm_face_rest(out: *mut i32) {
 pub fn live_artic(h: *const ChimeraMpc) -> Option<HumanArtic> {
     // SAFETY: as in guarded
     unsafe { h.as_ref() }.map(|e| e.engine.voice().artic.x)
+}
+
+/// The BEATBOX square last heard (0 none, 1..16: a pad hit or the beat reaching that step) into
+/// `out[0]`, and a count that moves at every one into `out[1]`. Cheap; once a block.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_step_lit(h: *mut ChimeraMpc, out: *mut i32) {
+    if out.is_null() {
+        return;
+    }
+    guarded(h, |e| {
+        // SAFETY: the caller gives room for 2 values
+        unsafe {
+            *out = e.step_lit;
+            *out.add(1) = e.step_serial;
+        }
+    });
 }
 
 /// 1 once a panic has silenced the engine.
