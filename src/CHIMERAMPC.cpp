@@ -576,6 +576,15 @@ private:
             // the typed text: its value moves so the host reads the new text (a report alone does
             // not refresh a text whose value stayed the same); reported even while knobs move, as
             // typing is taps
+            // Beatbox's latency: while the sequence runs its hits land a fixed time after their point
+            // on the timeline, and the MPC is told so it can line the voice up with the other
+            // tracks; the other modes play at once (0). Told only while no setting is moving.
+            const int wantLatency = getInt(kMode) == 3 ? (int)std::lround(cm_beat_latency() * sampleRate()) : 0;
+            if (wantLatency != latencyTold_ && knobLooks == 0)
+            {
+                latencyTold_ = wantLatency;
+                setLatency(wantLatency);
+            }
             const int typed = (int)(previewWrites_.load(std::memory_order_relaxed) % 1024u);
             if (typed != lastTyped)
             {
@@ -747,6 +756,7 @@ private:
     std::atomic<bool> allOff_{false};
     std::atomic<bool> settle_{false};
     std::atomic<bool> hitDark_{false};
+    int latencyTold_ = 0;   // the helper thread's
     static constexpr int kTapQueue = 64;
     static int tapSlot(int index) { return index == kKey ? 0 : index == kPad ? 1 : index == kConsonant ? 2 : 3; }
     std::atomic<int32_t> tapQueue_[kTapQueue] = {};

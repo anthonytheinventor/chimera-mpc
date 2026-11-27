@@ -782,3 +782,62 @@ fn consonants_have_no_tone_at_a_quarter_of_the_rate() {
     eprintln!("11025 Hz vs 9.5 kHz: {db:.1} dB");
     assert!(db < -20.0, "a tone at fs/4: {db:.1} dB against its neighbourhood");
 }
+
+#[test]
+fn play_breathes_harder_for_a_harder_key() {
+    let level = |vel: i32| {
+        let mut r = Rig::new();
+        r.set(p::MODE, 1.0);
+        r.render(0.3);
+        cm_note_on(r.h, 48, vel);
+        r.out.clear();
+        r.render(1.0);
+        rms(&r.out[r.out.len() / 2..])
+    };
+    let (soft, hard) = (level(25), level(127));
+    assert!(hard > soft * 1.2, "velocity does not change Play's breath: soft {soft}, hard {hard}");
+}
+
+/// When the hit of a beatbox pad lands after its note (its loudest moment), in ms.
+fn pad_hit_ms(playing: bool, square_sound: f32) -> f64 {
+    let mut r = Rig::new();
+    r.set(p::MODE, 3.0);
+    r.set(p::FOLLOW, 0.0);
+    for i in 0..16 {
+        r.set(p::STEP_1 + i, 0.0);
+    }
+    r.set(p::STEP_1, square_sound);
+    let mut buf = [0.0f32; 128];
+    let mut block = |r: &mut Rig| {
+        cm_transport(r.h, playing as i32, 1, 120.0, 1, 0.0, 128);
+        cm_set_params(r.h, r.params.as_ptr(), p::COUNT as i32);
+        cm_render(r.h, buf.as_mut_ptr(), 128);
+        r.out.extend_from_slice(&buf);
+    };
+    for _ in 0..100 {
+        block(&mut r);
+    }
+    r.out.clear();
+    cm_note_on(r.h, PAD_NOTE_FIRST as i32, 110);
+    for _ in 0..140 {
+        block(&mut r);
+    }
+    // the hit is the burst: the loudest 2 ms window
+    let w = (0.002 * FS) as usize;
+    let e: Vec<f32> = r.out.windows(w).step_by(16).map(|x| x.iter().map(|v| v * v).sum::<f32>()).collect();
+    let i = e.iter().enumerate().fold((0, 0.0f32), |b, (i, &v)| if v > b.1 { (i, v) } else { b }).0;
+    (i * 16 + w / 2) as f64 / FS * 1000.0
+}
+
+#[test]
+fn beatbox_hits_land_a_fixed_time_after_their_notes_while_the_sequence_runs() {
+    // square 1 as a kick (1) or a hat (2): different set-up times
+    let (kick, hat) = (pad_hit_ms(true, 1.0), pad_hit_ms(true, 2.0));
+    eprintln!("sequence running: kick {kick:.1} ms, hat {hat:.1} ms");
+    assert!((kick - hat).abs() < 12.0, "hits uneven: kick {kick:.1} ms, hat {hat:.1} ms");
+    assert!(kick > 160.0 && kick < 230.0, "kick at {kick:.1} ms");
+    // stopped: as soon as the mouth can make it (earlier, by sound)
+    let (kick0, hat0) = (pad_hit_ms(false, 1.0), pad_hit_ms(false, 2.0));
+    eprintln!("stopped: kick {kick0:.1} ms, hat {hat0:.1} ms");
+    assert!(hat0 < hat - 20.0, "a live hat is not earlier: {hat0:.1} vs {hat:.1} ms");
+}

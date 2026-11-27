@@ -141,6 +141,19 @@ const HUM_FROM: u8 = 60;
 /// each play the sound of the BEATBOX square with the same number. Other keys below C3 keep the
 /// General MIDI drum map.
 pub const PAD_NOTE_FIRST: u8 = 36;
+/// Beatbox while the MPC's sequence runs: every hit lands exactly this long after its point on
+/// the timeline (the steps followed from the host, pads and drum keys alike), and the plugin
+/// reports it as its latency so the MPC can line the voice up with its other tracks. A mouth
+/// sound needs 100 to 174 ms of set-up before its hit, so starting each one as soon as possible
+/// lands it late by a different amount per sound. As CHIMERA's plugin (docs/plugin.md, Beatbox).
+pub const BEAT_LATENCY: f64 = 0.18;
+
+/// How hard a key is played, as the breath it sends: CHIMERA's Singer's curve (0.62 at the
+/// softest, 1 near velocity 96, up to 1.14 at 127), used in Play too.
+fn breath_for_velocity(velocity: u8) -> f64 {
+    let v = velocity as f64;
+    0.62 + 0.4 * (v / 96.0).clamp(0.0, 1.0) + 0.12 * ((v - 96.0) / 31.0).max(0.0)
+}
 const HUM_DOWN: u8 = 24;
 const HUM_TAG: f64 = -1.0;
 const HUM_LEN: f64 = 3600.0;
@@ -321,6 +334,8 @@ pub struct ChimeraMpc {
     applied: [f32; p::COUNT],
     mode: i32,
     keys: [u8; MAX_KEYS],
+    /// Play: each held key's velocity (the sounding key's sets the breath)
+    key_velocity: [u8; 128],
     n_keys: usize,
     /// Beatbox: the keys humming (newest last)
     hums: [u8; MAX_KEYS],
@@ -398,6 +413,7 @@ impl ChimeraMpc {
             applied: [f32::NAN; p::COUNT],
             mode: MODE_SING,
             keys: [0; MAX_KEYS],
+            key_velocity: [100; 128],
             n_keys: 0,
             hums: [0; MAX_KEYS],
             n_hums: 0,
@@ -611,8 +627,11 @@ impl ChimeraMpc {
         (1..=STEP_IDS.len()).contains(&k).then(|| BeatStep { id: Label::new(STEP_IDS[k - 1]), note: None, accent: None })
     }
 
+    /// When a hit asked for now lands: while the sequence runs, a fixed BEAT_LATENCY later (the
+    /// MPC compensates it); stopped, as soon as the mouth can make it (live playing).
     fn beat_time(&mut self, id: &str) -> f64 {
         let wait = self.engine.beat_lead(id);
+        let wait = if self.transport.playing { wait.max(BEAT_LATENCY) } else { wait };
         self.engine.clock() + wait
     }
 
@@ -708,7 +727,7 @@ impl ChimeraMpc {
                     self.following = true;
                 }
                 let end = beats + samples as f64 / self.fs * bpm / 60.0;
-                self.engine.beat_follow(beats, end, bpm, 0.0);
+                self.engine.beat_follow(beats, end, bpm, BEAT_LATENCY);
             }
             None if self.following => {
                 self.following = false;
@@ -915,7 +934,9 @@ impl ChimeraMpc {
     fn expression(&self) -> (f64, f64) {
         let ch = self.expr_channel as usize;
         let press = self.pressure[ch].max(self.expr_note.map_or(0.0, |n| self.key_pressure[n as usize])) as f64;
-        let breath = (self.params[p::BREATH] as f64 * (1.0 + PRESSURE_DEPTH * press)).min(BREATH_MAX);
+        // Play: the sounding key's velocity, as Sing's notes take it (Breathe alone: the dial)
+        let vel = if self.mode == MODE_PLAY && self.n_keys > 0 { breath_for_velocity(self.key_velocity[self.keys[self.n_keys - 1] as usize]) } else { 1.0 };
+        let breath = (self.params[p::BREATH] as f64 * vel * (1.0 + PRESSURE_DEPTH * press)).min(BREATH_MAX);
         let slide = if self.params[p::MPE] >= 0.5 { (self.slide[ch] - self.slide_origin[ch]) as f64 * SLIDE_DEPTH } else { 0.0 };
         (breath, (self.params[p::BRIGHT] as f64 + slide).clamp(0.0, 1.0))
     }
@@ -1019,6 +1040,7 @@ impl ChimeraMpc {
                 }
             }
             _ => {
+                self.key_velocity[note as usize & 127] = velocity;
                 self.remove_key(note);
                 if self.n_keys == MAX_KEYS {
                     self.keys.copy_within(1.., 0);
@@ -1622,6 +1644,12 @@ pub extern "C" fn cm_step_lit(h: *mut ChimeraMpc, out: *mut i32) {
             *out.add(1) = e.step_serial;
         }
     });
+}
+
+/// Beatbox's latency, s (BEAT_LATENCY): the plugin reports it while in Beatbox mode.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_beat_latency() -> f64 {
+    BEAT_LATENCY
 }
 
 /// 1 once a panic has silenced the engine.

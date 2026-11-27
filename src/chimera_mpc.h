@@ -82,6 +82,9 @@ void cm_tap(ChimeraMpc* engine, int index, int value);
 // The BEATBOX square last heard into out[0] (0 none, 1..16: a pad hit, notes 36-51, or the beat
 // reaching that step), and a count that moves at every one into out[1].
 void cm_step_lit(ChimeraMpc* engine, int* out2);
+// Beatbox's latency while the sequence runs, in seconds (engine/src/lib.rs BEAT_LATENCY): the
+// plugin reports it in Beatbox mode.
+double cm_beat_latency(void);
 int cm_failed(const ChimeraMpc* engine);
 
 #ifdef __cplusplus

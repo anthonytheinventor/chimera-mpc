@@ -46,6 +46,14 @@ Type Slot and the slot that plays move together (Speech on the SPEAK page, or Ly
 typing for Sing), so the words on the WORDS page are the ones you hear. The keyboard types while the
 MPC's sequence is stopped, so taps recorded as automation never type again on playback.
 
+**Timing in Beatbox**: a mouth sound needs 100 to 174 ms to get ready before its hit. While the
+MPC's sequence runs, every Beatbox hit (the beat following the MPC, pads and drum keys) lands exactly
+180 ms after its point in time, and the plugin reports that as its latency so the MPC can line it up
+with the other tracks; with the sequence stopped, hits come as soon as the mouth can make them.
+
+In Play, how hard you play a key sets the breath (as Sing's notes do): soft keys breathe gently,
+hard ones push harder and brighter.
+
 The pitch wheel bends ±2 semitones, and channel or key pressure (aftertouch) breathes harder.
 With **MPE** on, MIDI channels 2 to 16 carry one note each: its own bend (±48 semitones),
 pressure, and slide (CC 74), which moves the brightness.
