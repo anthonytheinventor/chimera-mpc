@@ -51,6 +51,11 @@ MPC's sequence runs, every Beatbox hit (the beat following the MPC, pads and dru
 180 ms after its point in time, and the plugin reports that as its latency so the MPC can line it up
 with the other tracks; with the sequence stopped, hits come as soon as the mouth can make them.
 
+**Timing in Sing**: a syllable's consonants come before its vowel. While the MPC's sequence runs,
+each note's vowel lands exactly 180 ms after the note, with its consonants started early by as much
+as they need, and the plugin reports that latency so the vowels fall on the beat. Played live (the
+sequence stopped), notes start at once.
+
 In Play, how hard you play a key sets the breath (as Sing's notes do): soft keys breathe gently,
 hard ones push harder and brighter.
 

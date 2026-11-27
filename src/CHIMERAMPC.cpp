@@ -576,10 +576,13 @@ private:
             // the typed text: its value moves so the host reads the new text (a report alone does
             // not refresh a text whose value stayed the same); reported even while knobs move, as
             // typing is taps
-            // Beatbox's latency: while the sequence runs its hits land a fixed time after their point
+            // Beatbox's and Sing's latency: while the sequence runs its hits land a fixed time after their point
             // on the timeline, and the MPC is told so it can line the voice up with the other
             // tracks; the other modes play at once (0). Told only while no setting is moving.
-            const int wantLatency = getInt(kMode) == 3 ? (int)std::lround(cm_beat_latency() * sampleRate()) : 0;
+            // (Sing too: while the sequence runs its vowels land the same time after their notes,
+            // the consonants ahead of them)
+            const int mode = getInt(kMode);
+            const int wantLatency = (mode == 3 || mode == 0) ? (int)std::lround(cm_beat_latency() * sampleRate()) : 0;
             if (wantLatency != latencyTold_ && knobLooks == 0)
             {
                 latencyTold_ = wantLatency;

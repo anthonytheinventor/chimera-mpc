@@ -259,6 +259,8 @@ fn restart_starts_the_lyrics_over_when_the_transport_starts() {
     f.set(p::MODE, 0.0);
     f.wait_for_lyrics();
     let fresh_mark = f.out.len();
+    // timed alike: with the transport running, Sing's lookahead delays both notes the same
+    cm_transport(f.h, 1, 1, 120.0, 1, 0.0, 128);
     sing(&mut f, 1);
     let fresh = f.out[fresh_mark..].to_vec();
     // the same syllable: their spectra are close (both "Hel-"), measured as the level within 3 dB
@@ -840,4 +842,71 @@ fn beatbox_hits_land_a_fixed_time_after_their_notes_while_the_sequence_runs() {
     let (kick0, hat0) = (pad_hit_ms(false, 1.0), pad_hit_ms(false, 2.0));
     eprintln!("stopped: kick {kick0:.1} ms, hat {hat0:.1} ms");
     assert!(hat0 < hat - 20.0, "a live hat is not earlier: {hat0:.1} vs {hat:.1} ms");
+}
+
+/// Sing "ah", then "stra" (lyrics typed into slot 1); returns when each vowel arrives after its
+/// note (ms): the first 5 ms window at half the note's loudest.
+fn sung_vowels_ms(playing: bool) -> (f64, f64) {
+    let mut r = Rig::new();
+    r.set(p::MODE, 0.0);
+    r.wait_for_lyrics();
+    r.set(p::TYPE_INTO, 1.0);
+    r.set(p::TYPE_SLOT, 0.0);
+    r.set(p::LYRICS, 0.0);
+    r.set(p::KEY, 35.0); // Clear
+    r.render(0.01);
+    r.set(p::KEY, 0.0);
+    r.render(0.01);
+    for c in "ah stra".chars() {
+        r.set(p::KEY, key_of(c));
+        r.render(0.006);
+        r.set(p::KEY, 0.0);
+        r.render(0.006);
+    }
+    // the pause, then the lyrics are planned again
+    for _ in 0..60 {
+        r.render(0.02);
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+    let mut buf = [0.0f32; 128];
+    // the transport running (or not) before the notes; Restart off, so starting it keeps the cursor
+    r.set(p::RESTART, 0.0);
+    for _ in 0..20 {
+        cm_transport(r.h, playing as i32, 1, 120.0, 1, 0.0, 128);
+        cm_set_params(r.h, r.params.as_ptr(), p::COUNT as i32);
+        cm_render(r.h, buf.as_mut_ptr(), 128);
+    }
+    let mut note = |r: &mut Rig, n: i32| -> f64 {
+        r.out.clear();
+        cm_note_on(r.h, n, 100);
+        for _ in 0..(0.7 * FS / 128.0) as usize {
+            cm_transport(r.h, playing as i32, 1, 120.0, 1, 0.0, 128);
+            cm_set_params(r.h, r.params.as_ptr(), p::COUNT as i32);
+            cm_render(r.h, buf.as_mut_ptr(), 128);
+            r.out.extend_from_slice(&buf);
+        }
+        cm_note_off(r.h, n);
+        for _ in 0..(0.5 * FS / 128.0) as usize {
+            cm_transport(r.h, playing as i32, 1, 120.0, 1, 0.0, 128);
+            cm_set_params(r.h, r.params.as_ptr(), p::COUNT as i32);
+            cm_render(r.h, buf.as_mut_ptr(), 128);
+        }
+        let w = (0.005 * FS) as usize;
+        let e: Vec<f32> = r.out.chunks(w).map(|c| (c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32).sqrt()).collect();
+        let top = e.iter().cloned().fold(0.0f32, f32::max);
+        e.iter().position(|&v| v >= 0.5 * top).unwrap() as f64 * 5.0
+    };
+    (note(&mut r, 57), note(&mut r, 59))
+}
+
+#[test]
+fn while_the_sequence_runs_sung_vowels_land_a_fixed_time_after_their_notes() {
+    let (ah, stra) = sung_vowels_ms(true);
+    eprintln!("sequence running: ah {ah:.0} ms, stra {stra:.0} ms");
+    assert!((ah - stra).abs() < 40.0, "vowels uneven: ah {ah:.0}, stra {stra:.0} ms");
+    assert!(ah > 140.0 && ah < 260.0, "ah's vowel at {ah:.0} ms");
+    let (ah0, stra0) = sung_vowels_ms(false);
+    eprintln!("stopped: ah {ah0:.0} ms, stra {stra0:.0} ms");
+    assert!(stra0 > ah0 + 40.0, "live, 'stra' should reach its vowel later: ah {ah0:.0}, stra {stra0:.0} ms");
+    assert!(ah0 < ah - 60.0, "live notes should be immediate: {ah0:.0} vs {ah:.0} ms");
 }

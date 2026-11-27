@@ -627,6 +627,12 @@ impl ChimeraMpc {
         (1..=STEP_IDS.len()).contains(&k).then(|| BeatStep { id: Label::new(STEP_IDS[k - 1]), note: None, accent: None })
     }
 
+    /// Sing's lookahead: while the MPC's sequence runs, each vowel lands BEAT_LATENCY after its
+    /// note with the consonants ahead of it (the plugin reports the latency); live, none.
+    fn sing_delay(&self) -> f64 {
+        if self.transport.playing { BEAT_LATENCY } else { 0.0 }
+    }
+
     /// When a hit asked for now lands: while the sequence runs, a fixed BEAT_LATENCY later (the
     /// MPC compensates it); stopped, as soon as the mouth can make it (live playing).
     fn beat_time(&mut self, id: &str) -> f64 {
@@ -1014,7 +1020,10 @@ impl ChimeraMpc {
     fn note_on(&mut self, note: u8, velocity: u8) {
         self.apply_params();
         match self.mode {
-            MODE_SING => self.singer.note_on(&mut self.engine, note, velocity as f64),
+            MODE_SING => {
+                self.singer.delay = self.sing_delay();
+                self.singer.note_on(&mut self.engine, note, velocity as f64)
+            }
             MODE_SPEAK => {
                 let semitones = (note as f64 - SPEECH_ROOT).clamp(-SPEECH_RANGE, SPEECH_RANGE);
                 self.say_next(pow(2.0, semitones / 12.0));
@@ -1056,7 +1065,10 @@ impl ChimeraMpc {
 
     fn note_off(&mut self, note: u8) {
         match self.mode {
-            MODE_SING => self.singer.note_off(&mut self.engine, note),
+            MODE_SING => {
+                self.singer.delay = self.sing_delay();
+                self.singer.note_off(&mut self.engine, note)
+            }
             // a line is a one-shot: it ends by itself, or when the next one cuts it
             MODE_SPEAK => {}
             MODE_BEATBOX => {
