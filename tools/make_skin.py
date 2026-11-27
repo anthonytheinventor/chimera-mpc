@@ -176,8 +176,10 @@ PAGES = [
 ]
 WORDS_ROW = ["Type Into", "Type Slot", "Speech Rate", "Start Line"]
 BIPOLAR = {"Larynx", "Tongue Root"}
-# Pad 1 Note's steps (src/CHIMERAMPC.cpp): notes 0..112, Classic, then Learn, the last
+# Pad 1 Note's steps (src/CHIMERAMPC.cpp): notes 0..112, Classic, Learn, Custom, Learn All
 PAD_LEARN = 114
+PAD_LEARN_ALL = 116
+PAD_STEPS = 117
 MOMENTARY = {"Speak"}      # back to off when the finger lifts: each tap acts once
 BODIES = ["MALE", "FEMALE", "CHILD", "BLEND"]
 BODY_CAPTIONS = ["ADULT MALE", "ADULT FEMALE", "CHILD", "BLEND"]
@@ -1163,7 +1165,18 @@ def face_screen(b, ch, page, face):
         now_next_block(b, ch, page["now_next"])
     if page.get("left") in ("steps", "notes"):
         # the beat's name and tempo at the top right (the hit symbol and step need new parameters: step 2)
-        b.label(ch, params["Beat"], (SX + SW - 300, TOP + 38, 284, 30), 22.0, AMBER, "right verticallyCentred", "Regular")
+        # the beat's name: tapped, it takes the focus and the data wheel picks another (double tap:
+        # the list)
+        beat = b.ref(params["Beat"])
+
+        def beat_def():
+            return G.component_definition(G.control_actions("menu overlay"), [
+                focus_entry(AMBER, 284, 30),
+                G.entry("name", "Label", label_data("Value", argb(AMBER), 22.0, "right verticallyCentred", "Regular"),
+                        rect_str(0, 0, 278, 30), "No", "Show", "Always")], "00000000")
+        dn = b.need("chimBeatName", beat_def)
+        ch.append(G.entry("beat name", dn, G.obj(("version", 1), ("handleName", "Data")), rect_str(SX + SW - 300, TOP + 38, 284, 30),
+                          "Yes", "Show", "Always", remap=[("Data", beat.handle)]))
         b.label(ch, params["Tempo"], (SX + SW - 160, TOP + 70, 100, 26), 20.0, LABEL, "right verticallyCentred", "Regular")
         b.cap(ch, SX + SW - 54, TOP + 77, "BPM", 12, AMBER, "l", 0.1, 0.8)
     if page.get("left") == "notes":
@@ -1177,9 +1190,15 @@ def face_screen(b, ch, page, face):
         b.label(ch, params["Last Note"], (SX + SW - 128, TOP + 104, 112, 26), 20.0, LABEL, "right verticallyCentred", "Regular")
         b.cap(ch, SX + SW - 138, TOP + 142, "PAD 1", 12, QUIET, "r", 0.1)
         b.label(ch, params["Pad 1 Note"], (SX + SW - 128, TOP + 134, 112, 26), 20.0, LABEL, "right verticallyCentred", "Regular")
-        # (Pad 1 Note has more steps than host_sim lists as choices: its last one, Learn, by number)
+        # (Pad 1 Note has more steps than host_sim lists as choices: Learn and Learn All by number)
         on, off = chip_files("LEARN PAD 1", 128, 34, px=13)
-        b.button(ch, params["Pad 1 Note"], on, off, PAD_LEARN, PAD_LEARN + 1, SX + SW - 144, TOP + 168, name="learn pad 1")
+        b.button(ch, params["Pad 1 Note"], on, off, PAD_LEARN, PAD_STEPS, SX + SW - 144, TOP + 168, name="learn pad 1")
+        # Learn All: hit pads 1 to 16 in turn; the square to hit next stays lit
+        on, off = chip_files("LEARN ALL 16", 128, 34, px=13)
+        b.button(ch, params["Pad 1 Note"], on, off, PAD_LEARN_ALL, PAD_STEPS, SX + SW - 144, TOP + 210, name="learn all pads")
+        # how Learn All goes, in front of the neck (the widest free place below the chin)
+        for k, line in enumerate(("LEARN ALL 16: HIT PADS 1 TO 16 IN TURN,", "THE LIT SQUARE'S PAD NEXT (ANY LAYOUT:", "CHROMATIC, A KEY, A BANK)")):
+            b.cap(ch, SX + 14, TOP + 508 + k * 20, line, 12, QUIET, "l", 0.1)
 
 
 def now_next_block(b, ch, kind):
@@ -1651,9 +1670,10 @@ def main():
     put("puck.png", _puck())
     tui, qmaps, b = build_tui(params, units, placements)
 
-    # every parameter the skin must reach is on some page (Face, the old 33-pose strip, stays unused)
+    # every parameter the skin must reach is on some page (Face, the old 33-pose strip, stays unused;
+    # Pad Map 1-16 are Learn All's table, filled by the plugin, not set by hand)
     shown = set(b.referenced)
-    missing = [p.name for p in plist if p.index not in shown and p.name != "Face"]
+    missing = [p.name for p in plist if p.index not in shown and p.name != "Face" and not p.name.startswith("Pad Map ")]
     if missing:
         sys.exit("make_skin: not on any page: %s" % ", ".join(missing))
 

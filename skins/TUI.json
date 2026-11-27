@@ -3123,7 +3123,117 @@
                     }
                 },
                 {
-                    "key": "chimButton chip_learn_pad_1_128_on.png chip_learn_pad_1_128_off.png 114 115",
+                    "key": "chimBeatName",
+                    "value": {
+                        "version": 2,
+                        "actions": [
+                            {
+                                "version": 1,
+                                "onAction": "Mouse Down",
+                                "handler": "Q-Link",
+                                "handleName": "Data",
+                                "additionalData": ""
+                            },
+                            {
+                                "version": 1,
+                                "onAction": "Double Click",
+                                "handler": "Show Overlay",
+                                "handleName": "Data",
+                                "additionalData": "menu overlay"
+                            },
+                            {
+                                "version": 1,
+                                "onAction": "Enter Pressed",
+                                "handler": "Show Overlay",
+                                "handleName": "Data",
+                                "additionalData": "menu overlay"
+                            }
+                        ],
+                        "backgroundData": {
+                            "version": 1,
+                            "focussed": {
+                                "version": 1,
+                                "colour": "00000000",
+                                "image": ""
+                            },
+                            "unfocussed": {
+                                "version": 1,
+                                "colour": "00000000",
+                                "image": ""
+                            }
+                        },
+                        "ignoreMousePresses": false,
+                        "disableCoarseDataWheel": false,
+                        "componentsData": [
+                            {
+                                "version": 2,
+                                "componentData": {
+                                    "version": 1,
+                                    "name": "focus",
+                                    "type": "Focus",
+                                    "data": {
+                                        "version": 1,
+                                        "backgroundColour": "16ffb340",
+                                        "outlineColour": "ffffb340",
+                                        "backgroundInset": 2.0,
+                                        "outlineThickness": 2.0
+                                    }
+                                },
+                                "handle remapping": {
+                                    "version": 1,
+                                    "map": []
+                                },
+                                "bounds": {
+                                    "version": 1,
+                                    "acceptsHWFocus": "No",
+                                    "showWhenDataModelInvalid": "Show",
+                                    "whenVisible": "WhenFocussed",
+                                    "boundsType": "Absolute",
+                                    "bounds": "0 0 284 30"
+                                }
+                            },
+                            {
+                                "version": 2,
+                                "componentData": {
+                                    "version": 1,
+                                    "name": "name",
+                                    "type": "Label",
+                                    "data": {
+                                        "version": 1,
+                                        "textStyle": {
+                                            "version": 1,
+                                            "font": {
+                                                "version": 1,
+                                                "name": "Roboto",
+                                                "style": "Regular",
+                                                "height": 22.0
+                                            },
+                                            "colour": "ffffb340",
+                                            "justification": "right verticallyCentred",
+                                            "case": "Original"
+                                        },
+                                        "type": "Value",
+                                        "handleName": "Data"
+                                    }
+                                },
+                                "handle remapping": {
+                                    "version": 1,
+                                    "map": []
+                                },
+                                "bounds": {
+                                    "version": 1,
+                                    "acceptsHWFocus": "No",
+                                    "showWhenDataModelInvalid": "Show",
+                                    "whenVisible": "Always",
+                                    "boundsType": "Absolute",
+                                    "bounds": "0 0 278 30"
+                                }
+                            }
+                        ]
+                    }
+                },
+                {
+                    "key": "chimButton chip_learn_pad_1_128_on.png chip_learn_pad_1_128_off.png 114 117",
                     "value": {
                         "version": 2,
                         "actions": [],
@@ -3154,7 +3264,60 @@
                                         "onImage": "chip_learn_pad_1_128_on.png",
                                         "offImage": "chip_learn_pad_1_128_off.png",
                                         "buttonId": 114,
-                                        "numButtonsInGroup": 115,
+                                        "numButtonsInGroup": 117,
+                                        "handleName": "Data",
+                                        "gestureBehaviour": "Instant"
+                                    }
+                                },
+                                "handle remapping": {
+                                    "version": 1,
+                                    "map": []
+                                },
+                                "bounds": {
+                                    "version": 1,
+                                    "acceptsHWFocus": "No",
+                                    "showWhenDataModelInvalid": "Show",
+                                    "whenVisible": "Always",
+                                    "boundsType": "Absolute",
+                                    "bounds": "0 0 128 34"
+                                }
+                            }
+                        ]
+                    }
+                },
+                {
+                    "key": "chimButton chip_learn_all_16_128_on.png chip_learn_all_16_128_off.png 116 117",
+                    "value": {
+                        "version": 2,
+                        "actions": [],
+                        "backgroundData": {
+                            "version": 1,
+                            "focussed": {
+                                "version": 1,
+                                "colour": "00000000",
+                                "image": ""
+                            },
+                            "unfocussed": {
+                                "version": 1,
+                                "colour": "00000000",
+                                "image": ""
+                            }
+                        },
+                        "ignoreMousePresses": false,
+                        "disableCoarseDataWheel": false,
+                        "componentsData": [
+                            {
+                                "version": 2,
+                                "componentData": {
+                                    "version": 1,
+                                    "name": "b",
+                                    "type": "Button",
+                                    "data": {
+                                        "version": 2,
+                                        "onImage": "chip_learn_all_16_128_on.png",
+                                        "offImage": "chip_learn_all_16_128_off.png",
+                                        "buttonId": 116,
+                                        "numButtonsInGroup": 117,
                                         "handleName": "Data",
                                         "gestureBehaviour": "Instant"
                                     }
@@ -24576,23 +24739,10 @@
                             "version": 2,
                             "componentData": {
                                 "version": 1,
-                                "name": "value Beat",
-                                "type": "Label",
+                                "name": "beat name",
+                                "type": "chimBeatName",
                                 "data": {
                                     "version": 1,
-                                    "textStyle": {
-                                        "version": 1,
-                                        "font": {
-                                            "version": 1,
-                                            "name": "Roboto",
-                                            "style": "Regular",
-                                            "height": 22.0
-                                        },
-                                        "colour": "ffffb340",
-                                        "justification": "right verticallyCentred",
-                                        "case": "Original"
-                                    },
-                                    "type": "Value",
                                     "handleName": "Data"
                                 }
                             },
@@ -24607,7 +24757,7 @@
                             },
                             "bounds": {
                                 "version": 1,
-                                "acceptsHWFocus": "No",
+                                "acceptsHWFocus": "Yes",
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
@@ -24823,7 +24973,7 @@
                             "componentData": {
                                 "version": 1,
                                 "name": "learn pad 1",
-                                "type": "chimButton chip_learn_pad_1_128_on.png chip_learn_pad_1_128_off.png 114 115",
+                                "type": "chimButton chip_learn_pad_1_128_on.png chip_learn_pad_1_128_off.png 114 117",
                                 "data": {
                                     "version": 1,
                                     "handleName": "Data"
@@ -24845,6 +24995,113 @@
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
                                 "bounds": "1124 220 128 34"
+                            }
+                        },
+                        {
+                            "version": 2,
+                            "componentData": {
+                                "version": 1,
+                                "name": "learn all pads",
+                                "type": "chimButton chip_learn_all_16_128_on.png chip_learn_all_16_128_off.png 116 117",
+                                "data": {
+                                    "version": 1,
+                                    "handleName": "Data"
+                                }
+                            },
+                            "handle remapping": {
+                                "version": 1,
+                                "map": [
+                                    {
+                                        "key": "Data",
+                                        "value": "Parameter 84"
+                                    }
+                                ]
+                            },
+                            "bounds": {
+                                "version": 1,
+                                "acceptsHWFocus": "No",
+                                "showWhenDataModelInvalid": "Hide",
+                                "whenVisible": "Always",
+                                "boundsType": "Absolute",
+                                "bounds": "1124 262 128 34"
+                            }
+                        },
+                        {
+                            "version": 2,
+                            "componentData": {
+                                "version": 1,
+                                "name": "cap LEARN ALL 16: HIT PADS 1 TO 16 IN TURN,",
+                                "type": "Image",
+                                "data": {
+                                    "version": 2,
+                                    "imageType": "Regular",
+                                    "colour": "0",
+                                    "image": "t_cap_a1c2cf.png"
+                                }
+                            },
+                            "handle remapping": {
+                                "version": 1,
+                                "map": []
+                            },
+                            "bounds": {
+                                "version": 1,
+                                "acceptsHWFocus": "No",
+                                "showWhenDataModelInvalid": "Show",
+                                "whenVisible": "Always",
+                                "boundsType": "Absolute",
+                                "bounds": "687 555 254 23"
+                            }
+                        },
+                        {
+                            "version": 2,
+                            "componentData": {
+                                "version": 1,
+                                "name": "cap THE LIT SQUARE'S PAD NEXT (ANY LAYOUT:",
+                                "type": "Image",
+                                "data": {
+                                    "version": 2,
+                                    "imageType": "Regular",
+                                    "colour": "0",
+                                    "image": "t_cap_8b5a39.png"
+                                }
+                            },
+                            "handle remapping": {
+                                "version": 1,
+                                "map": []
+                            },
+                            "bounds": {
+                                "version": 1,
+                                "acceptsHWFocus": "No",
+                                "showWhenDataModelInvalid": "Show",
+                                "whenVisible": "Always",
+                                "boundsType": "Absolute",
+                                "bounds": "688 575 254 23"
+                            }
+                        },
+                        {
+                            "version": 2,
+                            "componentData": {
+                                "version": 1,
+                                "name": "cap CHROMATIC, A KEY, A BANK)",
+                                "type": "Image",
+                                "data": {
+                                    "version": 2,
+                                    "imageType": "Regular",
+                                    "colour": "0",
+                                    "image": "t_cap_7507b4.png"
+                                }
+                            },
+                            "handle remapping": {
+                                "version": 1,
+                                "map": []
+                            },
+                            "bounds": {
+                                "version": 1,
+                                "acceptsHWFocus": "No",
+                                "showWhenDataModelInvalid": "Show",
+                                "whenVisible": "Always",
+                                "boundsType": "Absolute",
+                                "bounds": "687 595 174 23"
                             }
                         },
                         {
@@ -31341,23 +31598,10 @@
                             "version": 2,
                             "componentData": {
                                 "version": 1,
-                                "name": "value Beat",
-                                "type": "Label",
+                                "name": "beat name",
+                                "type": "chimBeatName",
                                 "data": {
                                     "version": 1,
-                                    "textStyle": {
-                                        "version": 1,
-                                        "font": {
-                                            "version": 1,
-                                            "name": "Roboto",
-                                            "style": "Regular",
-                                            "height": 22.0
-                                        },
-                                        "colour": "ffffb340",
-                                        "justification": "right verticallyCentred",
-                                        "case": "Original"
-                                    },
-                                    "type": "Value",
                                     "handleName": "Data"
                                 }
                             },
@@ -31372,7 +31616,7 @@
                             },
                             "bounds": {
                                 "version": 1,
-                                "acceptsHWFocus": "No",
+                                "acceptsHWFocus": "Yes",
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",

@@ -104,6 +104,11 @@ double cm_beat_latency(void);
 // The typing cursor: characters before the end of the slot being typed (0: at the end). The audio
 // thread, once a block.
 void cm_text_cursor(ChimeraMpc* engine, int from_end);
+// Custom's table of the pads' notes (16 values, Pad Map 1-16). The audio thread, once a block.
+void cm_pad_map(ChimeraMpc* engine, const int* map16);
+// Learn All's progress: out[0] the next pad to hit (0..15), 16 when done, -1 when not learning;
+// out[2..18] the notes learned. The audio thread.
+void cm_pad_learn(ChimeraMpc* engine, int* out18);
 int cm_failed(const ChimeraMpc* engine);
 
 #ifdef __cplusplus

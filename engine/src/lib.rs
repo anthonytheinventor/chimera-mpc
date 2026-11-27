@@ -159,6 +159,11 @@ pub const PAD_NOTE_FIRST: u8 = 36;
 pub const PAD_BASE_MAX: u8 = 112;
 pub const PAD_NOTES_CLASSIC: u8 = 113;
 pub const PAD_NOTES_LEARN: u8 = 114;
+/// Custom: each pad's own note, from a table (the plugin's Pad Map 1-16, which Learn All fills).
+pub const PAD_NOTES_CUSTOM: u8 = 115;
+/// Learn All: the next 16 notes in Beatbox are pads 1 to 16, in order (any layout: Pad Perform's
+/// scales, a bank, a hand-made map). The plugin then writes them to Pad Map and picks Custom.
+pub const PAD_NOTES_LEARN_ALL: u8 = 116;
 /// The classic MPC note map (Akai's "Classic MPC" pad note preset, the MPC 3000 / 2000 drum
 /// layout), pads A01-A16. A learned pad 1 sending note 37 picks it.
 pub const CLASSIC_PADS: [u8; 16] = [37, 36, 42, 82, 40, 38, 46, 44, 48, 47, 45, 43, 49, 55, 51, 53];
@@ -170,6 +175,11 @@ pub fn pad_square(note: u8, setting: u8) -> Option<usize> {
         PAD_NOTES_CLASSIC => CLASSIC_PADS.iter().position(|&n| n == note),
         _ => None,
     }
+}
+
+/// The square a note plays with a table of the pads' notes (Custom).
+pub fn pad_square_in(note: u8, map: &[u8; STEPS]) -> Option<usize> {
+    map.iter().position(|&n| n == note)
 }
 
 /// Pad 1 Note's setting when pad 1 sends `note`: 37 (classic MPC pad A01) is the classic layout,
@@ -377,6 +387,11 @@ pub struct ChimeraMpc {
     note_serial: i32,
     /// Pad 1 Note learned while the parameter says Learn (the plugin then writes it there)
     pad_learned: Option<u8>,
+    /// Custom: each pad's note (the plugin's Pad Map 1-16, passed each block)
+    pad_map: [u8; STEPS],
+    /// Learn All: the pads learned so far, in order, and how many
+    learn_map: [u8; STEPS],
+    learn_next: usize,
     hit_serial: i32,
     /// the voice clock up to which the sequencer's hits have been looked at
     hit_clock: f64,
@@ -474,6 +489,9 @@ impl ChimeraMpc {
             last_note: -1,
             note_serial: 0,
             pad_learned: None,
+            pad_map: core::array::from_fn(|i| PAD_NOTE_FIRST + i as u8),
+            learn_map: [0; STEPS],
+            learn_next: 0,
             hit_serial: 0,
             hit_clock: 0.0,
             base_gain,
@@ -974,6 +992,7 @@ impl ChimeraMpc {
         if changed(p::PAD_NOTES) {
             // a new setting (Learn picked again, or the learned one written back) starts over
             self.pad_learned = None;
+            self.learn_next = 0;
         }
         // the keyboard types only while the MPC's sequence is stopped: Key is automatable (the MPC
         // takes screen taps only on such parameters), so taps recorded as automation would type
@@ -1161,7 +1180,7 @@ impl ChimeraMpc {
 
     /// Pad 1 Note now: the parameter, or what Learn learned while it still says Learn.
     fn pad_notes(&self) -> u8 {
-        let s = (self.params[p::PAD_NOTES].round().max(0.0) as u8).min(PAD_NOTES_LEARN);
+        let s = (self.params[p::PAD_NOTES].round().max(0.0) as u8).min(PAD_NOTES_LEARN_ALL);
         if s == PAD_NOTES_LEARN { self.pad_learned.unwrap_or(s) } else { s }
     }
 
@@ -1189,7 +1208,24 @@ impl ChimeraMpc {
                     pads = learned_pad_notes(note);
                     self.pad_learned = Some(pads);
                 }
-                if let Some(i) = pad_square(note, pads) {
+                // Learn All: this note is the next pad's (a pad struck twice by mistake does not
+                // skip a square: the same note again replays the last one learned)
+                let mut square = None;
+                if pads == PAD_NOTES_LEARN_ALL {
+                    let i = self.learn_next;
+                    if i > 0 && self.learn_map[i - 1] == note {
+                        square = Some(i - 1);
+                    } else if i < STEPS {
+                        self.learn_map[i] = note;
+                        self.learn_next = i + 1;
+                        square = Some(i);
+                    }
+                } else if pads == PAD_NOTES_CUSTOM {
+                    square = pad_square_in(note, &self.pad_map);
+                } else {
+                    square = pad_square(note, pads);
+                }
+                if let Some(i) = square {
                     // a pad: its square lights, and plays the sound in it (a rest stays silent)
                     self.show_step(i);
                     if let Some(s) = self.beat_step(i) {
@@ -1970,6 +2006,42 @@ pub extern "C" fn cm_text_cursor(h: *mut ChimeraMpc, from_end: i32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn cm_beat_latency() -> f64 {
     BEAT_LATENCY
+}
+
+/// Custom's table: each pad's note (16 values, the plugin's Pad Map 1-16). Once a block.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_pad_map(h: *mut ChimeraMpc, map: *const i32) {
+    if map.is_null() {
+        return;
+    }
+    // SAFETY: the caller gives 16 values
+    let m = unsafe { std::slice::from_raw_parts(map, STEPS) };
+    guarded(h, |e| {
+        for (d, &v) in e.pad_map.iter_mut().zip(m) {
+            *d = v.clamp(0, 127) as u8;
+        }
+    });
+}
+
+/// Learn All's progress into `out` (18 values): `out[0]` the next pad to hit (0..15) while
+/// learning, 16 when all are learned, -1 when not learning; `out[1]` unused (0); `out[2..18]`
+/// the notes learned so far.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_pad_learn(h: *mut ChimeraMpc, out: *mut i32) {
+    if out.is_null() {
+        return;
+    }
+    guarded(h, |e| {
+        let learning = e.params[p::PAD_NOTES].round() as i32 == PAD_NOTES_LEARN_ALL as i32;
+        // SAFETY: the caller gives room for 18 values
+        unsafe {
+            *out = if learning { e.learn_next as i32 } else { -1 };
+            *out.add(1) = 0;
+            for i in 0..STEPS {
+                *out.add(2 + i) = e.learn_map[i] as i32;
+            }
+        }
+    });
 }
 
 /// 1 once a panic has silenced the engine.

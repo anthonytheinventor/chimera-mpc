@@ -1465,3 +1465,49 @@ fn picking_hum_bass_fills_the_notes() {
     assert_eq!(cm_beat_preset_notes(0, notes.as_mut_ptr(), accents.as_mut_ptr()), 1);
     assert_eq!(notes, [0.0; 16]);
 }
+
+#[test]
+fn learn_all_maps_any_pad_layout_and_custom_plays_it() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 3.0);
+    r.set(p::FOLLOW, 0.0);
+    r.set(p::PAD_NOTES, PAD_NOTES_LEARN_ALL as f32);
+    r.render(0.2);
+    // pads in a key (C major from C1): not a semitone apart
+    let scale = [36, 38, 40, 41, 43, 45, 47, 48, 50, 52, 53, 55, 57, 59, 60, 62];
+    let mut out = [0i32; 18];
+    let mut lit = [0i32; 2];
+    for (i, &n) in scale.iter().enumerate() {
+        cm_pad_learn(r.h, out.as_mut_ptr());
+        assert_eq!(out[0], i as i32, "next pad to hit");
+        cm_note_on(r.h, n, 100);
+        r.render(0.02);
+        cm_note_off(r.h, n);
+        cm_step_lit(r.h, lit.as_mut_ptr());
+        assert_eq!(lit[0], i as i32 + 1, "pad {} lit its square", i + 1);
+        if i == 3 {
+            // the same pad again by mistake: no square is skipped
+            cm_note_on(r.h, n, 100);
+            r.render(0.02);
+            cm_note_off(r.h, n);
+            cm_pad_learn(r.h, out.as_mut_ptr());
+            assert_eq!(out[0], 4, "a repeated pad must not skip a square");
+        }
+    }
+    cm_pad_learn(r.h, out.as_mut_ptr());
+    assert_eq!(out[0], 16, "all 16 learned");
+    assert_eq!(&out[2..18], &scale, "the notes learned");
+    // what the plugin then does: the table into Custom
+    r.set(p::PAD_NOTES, PAD_NOTES_CUSTOM as f32);
+    cm_pad_map(r.h, scale.as_ptr());
+    r.render(0.05);
+    cm_pad_learn(r.h, out.as_mut_ptr());
+    assert_eq!(out[0], -1, "not learning any more");
+    for (i, &n) in scale.iter().enumerate().rev() {
+        cm_note_on(r.h, n, 100);
+        r.render(0.02);
+        cm_note_off(r.h, n);
+        cm_step_lit(r.h, lit.as_mut_ptr());
+        assert_eq!(lit[0], i as i32 + 1, "note {n} plays square {}", i + 1);
+    }
+}

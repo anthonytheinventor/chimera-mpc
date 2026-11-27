@@ -136,12 +136,16 @@ enum ParamIndex
     kStepNote16 = kStepNote1 + 15,
     kStepAccent1,              // Beatbox: each square's accent (off / on: STEP_ACCENT, 1.3)
     kStepAccent16 = kStepAccent1 + 15,
+    kPadMap1,                  // Beatbox: pad n's note for Pad 1 Note = Custom (Learn All fills them)
+    kPadMap16 = kPadMap1 + 15,
     kNumParams
 };
 
 constexpr int kEngineParams = kPadNotes + 1;   // the engine reads 0..kPadNotes (engine/src/lib.rs, module p; it ignores the displays)
 constexpr int kPadBaseMax = 112;   // Pad 1 Note's choices: 0..112 a note, then Classic, then Learn (engine PAD_BASE_MAX..)
 constexpr int kPadLearn = kPadBaseMax + 2;
+constexpr int kPadCustom = kPadBaseMax + 3;     // each pad's own note, from Pad Map 1-16
+constexpr int kPadLearnAll = kPadBaseMax + 4;   // the next 16 Beatbox notes are pads 1 to 16
 constexpr int kNoteLow = 24, kNoteHigh = 60;   // the steps' hum notes: C0..C3 as the MPC names them
 
 bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit || (i >= kVisJaw && i <= kVisSound) || i == kStepLit || i == kTyped2 || i == kLastNote || i == kNow || i == kNext; }
@@ -306,6 +310,8 @@ public:
         for (int n = 0; n <= kPadBaseMax; ++n) padNotes.push_back(noteName(n));
         padNotes.push_back("Classic");
         padNotes.push_back("Learn");
+        padNotes.push_back("Custom");
+        padNotes.push_back("Learn All");
         addParam(mpc::choiceParam("pad_notes", "Pad 1 Note", padNotes, (int)d[kPadNotes]));
         for (int n = 0; n < 128; ++n) lastNote.push_back(noteName(n));
         mpc::Param last = mpc::choiceParam("last_note", "Last Note", lastNote, 0);
@@ -333,6 +339,15 @@ public:
             const std::string id = "step_accent_" + std::string(i < 9 ? "0" : "") + std::to_string(i + 1);
             const std::string name = "Accent " + std::to_string(i + 1);
             addParam(mpc::boolParam(id.c_str(), name.c_str(), false));
+        }
+        // Pad Map 1-16: each pad's note when Pad 1 Note says Custom (Learn All writes them)
+        for (int i = 0; i < 16; ++i)
+        {
+            const std::string id = "pad_map_" + std::string(i < 9 ? "0" : "") + std::to_string(i + 1);
+            const std::string name = "Pad Map " + std::to_string(i + 1);
+            mpc::Param m = mpc::intParam(id.c_str(), name.c_str(), 0, 127, 36 + i);
+            m.automatable = false;
+            addParam(m);
         }
         texts_ = cm_texts_new();
 
@@ -482,6 +497,9 @@ public:
             stepAccents[i] = get(kStepAccent1 + i) >= 0.5f ? 1.0f : 0.0f;
         }
         cm_step_notes(e, stepNotes, stepAccents);
+        int padMap[16];
+        for (int i = 0; i < 16; ++i) padMap[i] = getInt(kPadMap1 + i);
+        cm_pad_map(e, padMap);
         const mpc::Transport& t = ctx.transport;
         cm_transport(e, t.playing ? 1 : 0, t.tempoValid ? 1 : 0, t.bpm, t.ppqValid ? 1 : 0, t.ppqPos, ctx.numFrames);
 
@@ -559,6 +577,17 @@ public:
         cm_step_lit(e, step);
         stepPad_.store(step[0], std::memory_order_relaxed);
         stepCount_.store(step[1], std::memory_order_release);
+        // Learn All: the square to hit next, and when all 16 are in, the table goes into Pad Map and
+        // Pad 1 Note says Custom (the helper thread tells the host)
+        int learn[18] = {-1};
+        cm_pad_learn(e, learn);
+        learnNext_.store(learn[0], std::memory_order_relaxed);
+        if (learn[0] == 16 && getInt(kPadNotes) == kPadLearnAll)
+        {
+            for (int i = 0; i < 16; ++i) set(kPadMap1 + i, (float)learn[2 + i]);
+            set(kPadNotes, (float)kPadCustom);
+            padLearned_.store(true, std::memory_order_release);
+        }
         // Learn heard pad 1: its setting goes into Pad 1 Note (the helper thread tells the host)
         int notes[3] = {-1, 0, -1};
         cm_pad_notes(e, notes);
@@ -770,6 +799,9 @@ private:
             }
             else if (stepLooks > 0 && --stepLooks == 0)
                 litStep = 0;
+            // Learn All: the square whose pad to hit next stays lit
+            const int learnNext = learnNext_.load(std::memory_order_relaxed);
+            if (learnNext >= 0 && learnNext < 16) litStep = learnNext + 1;
             // (held while a setting moves: the beat's steps would report several times a second
             // during a knob sweep on BEATBOX, which can lock up the MPC's Q-Link screen)
             if (litStep != shownStep && knobLooks == 0)
@@ -932,6 +964,7 @@ private:
     std::atomic<int> tapLast_[4] = {};
     std::atomic<int> velumFrame_{0}, hitPad_{0}, hitCount_{0}, stepPad_{0}, stepCount_{0}, lastNote_{-1};
     std::atomic<bool> padLearned_{false};
+    std::atomic<int> learnNext_{-1};
     std::atomic<int> faceNow_[kFaceLayers] = {};
     int faceFrames_[kFaceLayers] = {10, 28, 18, 12, 7, 6};   // cm_face_frames
     int stripTurn_ = 0;                                 // the helper thread's
