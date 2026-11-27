@@ -35,13 +35,13 @@ CHIMERA MPC is an independent project, not made or endorsed by Jameson Hodge.
 With **Restart** on, Sing and Speak start again from Start Syl and Start Line each time the MPC's
 transport starts.
 
-**Typing your own words**: on the WORDS page, pick **Type Into** (Speech or Lyrics) and **Type Slot**
+**Typing your own words**: on the WORDS page, pick **Type Into** (Speak or Sing: what Speak says or what Sing sings) and **Type Slot**
 (1 to 8), then type on the keyboard. **Del** takes the last character back, **Clear** empties the slot,
-and in Speech **Line** starts a new line: each note says the next line. The slot starts with the line
+and for Speak **Line** starts a new line: each note says the next line. The slot starts with the line
 from the text file; what you type replaces it and is saved with the project. A moment after you stop
 typing, the next note says (or sings) the new words; **Speak** says the next line without a key.
 Type Slot and the slot that plays move together (Speech on the SPEAK page, or Lyrics on SING while
-typing lyrics), so the words on the WORDS page are the ones you hear. The keyboard types while the
+typing for Sing), so the words on the WORDS page are the ones you hear. The keyboard types while the
 MPC's sequence is stopped, so taps recorded as automation never type again on playback.
 
 The pitch wheel bends ±2 semitones, and channel or key pressure (aftertouch) breathes harder.
@@ -52,9 +52,13 @@ pressure, and slide (CC 74), which moves the brightness.
 
 CHIMERA's look (glowing outlines on black): the controls on the left, so the MPC's Q-Link window,
 which slides in from the right, never covers them, and on the right the vocal tract, a full head in
-profile whose mouth and soft palate move as it sounds. Each column of four Q-Links is one of
+profile. Its tongue, jaw, upper and lower lip, larynx and soft palate each move on their own, so
+turning one knob (or dragging the vowel pad) moves just that part, and in Sing, Speak and Beatbox
+they all follow the voice. The amber lines across the mouth and throat glow brighter as the voice
+gets louder and go dark when it is silent. Each column of four Q-Links is one of
 CHIMERA's pages of four, colored green, red, pink and white from top to bottom, matching the column
-of four in the Q-Link window. Under the chin, the Jaw, Lips and Velum readouts follow their knobs.
+of four in the Q-Link window. Under the chin, the Jaw, Lips and Velum readouts follow their knobs;
+Velum says Shut while the soft palate closes off the nose.
 Buttons that are on are solid; off, they are an outline. On KIT, the pad last heard lights up,
 whether you tapped it, played its drum key, or the beat played it.
 
@@ -127,11 +131,17 @@ yet on 32-bit ARM. The engine is built from the `mpc-opt` branch of a CHIMERA ch
 - `plugin.json`: manifest (name, manufacturer, uid). The `uid` must match the C++ `uniqueId`.
 - `src/CHIMERAMPC.cpp`: the plugin (parameters, MIDI, transport, output); `src/chimera_mpc.h`: the engine's C interface.
 - `engine/`: CHIMERA's engine behind that interface (Rust static library); `engine/src/worker.rs` is its own
-  thread (dictionary, lyrics, spoken lines, blended voices); `engine/src/close_mic.rs` is CHIMERA's close-mic sound.
+  thread (dictionary, lyrics, spoken lines, blended voices); `engine/src/close_mic.rs` is CHIMERA's close-mic sound;
+  `engine/src/face.rs` picks the face's frames each block (read-only parameters Jaw Pos, Tongue Pos, Lips Pos,
+  Lower Lip, Larynx Pos, Sound Lvl and Velum Pos).
+- `engine/examples/fit_face.rs`: renders speech, singing, consonants, beats, the vowel pad and the Play knobs,
+  clusters the tongue outlines it sees and writes `engine/src/face_tables.rs` (the tongue frames and the map
+  the engine picks them with). Run it again after changing the engine's articulation.
 - `build_chimera.py`: the build.
-- `tools/make_skin.py`: draws the screen (`skins/`, previews in `build/preview/`) from the build's
-  `build/params.json` and the vocal tract's outlines (`cargo run --release --example dump_face` in `engine/`,
-  written to `build/face.json`); `ui.json` is no longer used once `skins/` exists.
+- `tools/make_skin.py`: draws the screen (`skins/`, previews in `build/preview/`, including `face_*.png`
+  check postures with the true outlines drawn over the layers) from the build's `build/params.json` and the
+  vocal tract's outlines (`cargo run --release --example dump_face` in `engine/`, written to
+  `build/face.json`); `ui.json` is no longer used once `skins/` exists.
 - `Content/lyrics.txt`: the eight lyrics lines; `Content/speech.txt`: the eight blocks of spoken lines;
   `Content/cmudict.txt.gz`: the CMU pronouncing dictionary.
 - `Content/CHIMERA-LICENSE.txt`, `Content/CMUDICT-LICENSE.txt`: the licenses, shipped with the plugin.

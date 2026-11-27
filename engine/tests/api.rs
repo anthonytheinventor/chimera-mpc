@@ -588,3 +588,119 @@ fn a_tap_types_even_when_the_key_never_reaches_a_block() {
     let text = std::str::from_utf8(&buf[..n]).unwrap();
     assert!(text.ends_with("h_"), "typed text: {text}");
 }
+
+/// The face's frames now, as the plugin reads them once a block: jaw, tongue, upper lip, lower lip,
+/// larynx, sound (cm_face), then the soft palate (cm_display).
+fn face_now(r: &mut Rig) -> [i32; 7] {
+    let (mut f, mut d) = ([0i32; 6], [0i32; 4]);
+    cm_face(r.h, f.as_mut_ptr());
+    cm_display(r.h, d.as_mut_ptr());
+    [f[0], f[1], f[2], f[3], f[4], f[5], d[1]]
+}
+
+/// Render `seconds` in blocks of 128, reading the face after each block as the plugin does;
+/// returns the last reading.
+fn render_face(r: &mut Rig, seconds: f64) -> [i32; 7] {
+    let mut shown = face_now(r);
+    for _ in 0..(seconds * 20.0).ceil() as usize {
+        r.render(0.05);
+        shown = face_now(r);
+    }
+    shown
+}
+
+#[test]
+fn each_face_layer_follows_its_knob_in_play() {
+    let mut frames = [0i32; 6];
+    cm_face_frames(frames.as_mut_ptr());
+    let mut rest = [0i32; 6];
+    cm_face_rest(rest.as_mut_ptr());
+    let mut r = Rig::new();
+    r.set(p::MODE, 1.0);
+    let at_rest = render_face(&mut r, 0.6);
+    for (k, (&s, &n)) in at_rest.iter().zip(frames.iter()).enumerate() {
+        assert!(s >= 0 && s < n, "layer {k}: frame {s} of {n}");
+    }
+    assert_eq!(&at_rest[..5], &rest[..5], "the rest frames the plugin starts its parameters at: live {at_rest:?}, rest {rest:?}");
+    assert_eq!(at_rest[6], 0, "the soft palate is shut at rest");
+    let defaults = r.params.clone();
+    // (knob, value, the layers that must move: indices into face_now)
+    let moves: [(usize, f32, &[usize]); 8] = [
+        (p::JAW, 2.0, &[0]),
+        (p::TONGUE_UP, 7.8, &[1]),
+        (p::TONGUE_FWD, 1.4, &[1]),
+        (p::LIP_OPEN, 1.9, &[2, 3]),
+        (p::PROTRUDE, 1.3, &[2, 3]),
+        (p::LARYNX, -1.4, &[4]),
+        (p::VELUM, 1.0, &[6]),
+        (p::TIP_UP, 9.0, &[1]),
+    ];
+    for (knob, value, layers) in moves {
+        r.params = defaults.clone();
+        r.params[p::MODE] = 1.0;
+        render_face(&mut r, 0.6);
+        let before = face_now(&mut r);
+        r.set(knob, value);
+        let after = render_face(&mut r, 0.6);
+        for &l in layers {
+            assert_ne!(before[l], after[l], "knob {knob} to {value}: layer {l} stayed at frame {}", before[l]);
+        }
+    }
+    // the vowel pad moves the tongue, jaw and lips together
+    r.params = defaults.clone();
+    r.params[p::MODE] = 1.0;
+    r.pad(1.0, 0.0);
+    let i = render_face(&mut r, 0.6);
+    r.pad(0.5, 1.0);
+    let a = render_face(&mut r, 0.6);
+    assert_ne!(i[1], a[1], "the tongue from i to a");
+    assert_ne!(i[0], a[0], "the jaw from i to a");
+}
+
+#[test]
+fn the_sound_layer_lights_while_the_voice_sounds() {
+    let mut r = Rig::new();
+    r.set(p::MODE, 1.0);
+    assert_eq!(render_face(&mut r, 0.5)[5], 0, "silent: the sound layer is dark");
+    // a held note
+    cm_note_on(r.h, 48, 100);
+    let mut lit = 0;
+    for _ in 0..20 {
+        lit = lit.max(render_face(&mut r, 0.05)[5]);
+    }
+    assert!(lit > 0, "a held note leaves the sound layer dark");
+    cm_note_off(r.h, 48);
+    assert_eq!(render_face(&mut r, 1.5)[5], 0, "the sound layer goes dark after the note");
+    // Breathe, no key
+    r.set(p::BREATHE, 1.0);
+    let breathing = render_face(&mut r, 1.0)[5];
+    assert!(breathing > 0, "Breathe leaves the sound layer dark");
+    // louder breath, a brighter fan
+    r.set(p::BREATH, 20.0);
+    r.set(p::GAIN, 6.0);
+    let loud = render_face(&mut r, 1.0)[5];
+    assert!(loud >= breathing, "more breath dimmed the fan: {breathing} -> {loud}");
+    r.set(p::BREATHE, 0.0);
+    assert_eq!(render_face(&mut r, 1.5)[5], 0, "silent again after Breathe");
+}
+
+#[test]
+fn the_face_follows_speech() {
+    let mut r = Rig::new();
+    r.wait_for_lyrics();
+    r.set(p::MODE, 2.0);
+    r.render(0.1);
+    cm_note_on(r.h, 60, 100);
+    let mut seen = [std::collections::HashSet::new(), std::collections::HashSet::new(), std::collections::HashSet::new(), std::collections::HashSet::new()];
+    for _ in 0..60 {
+        let f = render_face(&mut r, 0.03);
+        for (s, v) in seen.iter_mut().zip([f[0], f[1], f[3], f[5]]) {
+            s.insert(v);
+        }
+    }
+    cm_note_off(r.h, 60);
+    assert!(seen[0].len() >= 2, "the jaw stood still while speaking: {:?}", seen[0]);
+    assert!(seen[1].len() >= 4, "the tongue barely moved while speaking: {:?}", seen[1]);
+    assert!(seen[2].len() >= 2, "the lower lip stood still while speaking: {:?}", seen[2]);
+    assert!(seen[3].len() >= 2, "the sound layer did not follow the speech: {:?}", seen[3]);
+}

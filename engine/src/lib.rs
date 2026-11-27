@@ -19,6 +19,7 @@
 //!   below C3 hit drum sounds (General MIDI's map), notes from C3 up hum two octaves down.
 
 mod close_mic;
+pub mod face;
 pub mod texts;
 mod worker;
 
@@ -247,41 +248,13 @@ impl Pad {
 
 // ---------------------------------------------------------------- the face on the screen
 
-/// The mouth postures the skin's face strip shows, one frame each (tools/make_skin.py draws them
-/// from `examples/dump_face.rs`, which takes this same list): the male body's calibrated vowels,
-/// then the lips closed, and the jaw from closed to wide open.
-pub fn face_postures() -> Vec<HumanArtic> {
-    let mut out = Vec::new();
-    if let Some(t) = vowel_table().get("male") {
-        for v in VOWELS {
-            if let Some(vt) = t.get(v.ipa) {
-                out.push(vt.artic.apply_to(&NEUTRAL));
-            }
-        }
-    }
-    let mut closed = NEUTRAL;
-    closed.lip_ap = -0.2;
-    closed.jaw = 0.35;
-    out.push(closed);
-    for k in 0..6 {
-        let mut a = NEUTRAL;
-        a.jaw = 0.1 + 0.4 * k as f64;
-        out.push(a);
-    }
-    out
-}
+pub use face::VELUM_FRAMES;
 
-/// The soft palate's frames on the screen, from shut to wide open (its parameter's range).
-pub const VELUM_FRAMES: usize = 8;
-pub fn velum_frame_value(i: usize) -> f64 {
-    -0.25 + 1.45 * i as f64 / (VELUM_FRAMES - 1) as f64
-}
-
-/// How far apart two mouth postures look (cm², roughly): the tongue body counts most, then the
-/// jaw and the lips.
-fn posture_distance(a: &HumanArtic, b: &HumanArtic) -> f64 {
-    let d = |x: f64, y: f64, w: f64| (x - y) * (x - y) * w;
-    d(a.tb_x, b.tb_x, 1.0) + d(a.tb_y, b.tb_y, 1.0) + d(a.jaw, b.jaw, 1.5) + d(a.lip_ap, b.lip_ap, 1.0) + d(a.lip_prot, b.lip_prot, 0.6) + d(a.lip_width, b.lip_width, 1.5) + d(a.root, b.root, 0.4)
+/// The upper incisor's edge in the male body (cm): the lips frames follow the lower lip tucking
+/// under it.
+fn male_incisor() -> (f64, f64) {
+    let t = chimera::anatomy::human::HumanVocalTract::new(chimera::anatomy::human::BODY_MALE);
+    t.palate().last().map_or((7.1, 7.95), |q| (q.x, q.y))
 }
 
 // ---------------------------------------------------------------- the engine
@@ -361,7 +334,9 @@ pub struct ChimeraMpc {
     transport: Transport,
     following: bool,
     close_mic: CloseMic,
-    face: Vec<HumanArtic>,
+    /// the screen's face: its smoothed output level and the frames last picked
+    face: face::FaceState,
+    incisor: (f64, f64),
     texts: Texts,
     /// keys typed while the bank was locked, to type at the next block
     pending_keys: [u8; 32],
@@ -427,7 +402,8 @@ impl ChimeraMpc {
             transport: Transport::default(),
             following: false,
             close_mic: CloseMic::new(fs),
-            face: face_postures(),
+            face: face::FaceState::new(),
+            incisor: male_incisor(),
             texts,
             pending_keys: [0; 32],
             n_pending: 0,
@@ -1112,11 +1088,16 @@ impl ChimeraMpc {
         if self.mode == MODE_BEATBOX && self.params[p::MIC] >= 0.5 {
             self.close_mic.process(out);
         }
+        let mut energy = 0.0f64;
         for x in out.iter_mut() {
             if !x.is_finite() {
                 *x = 0.0;
             }
+            energy += (*x as f64) * (*x as f64);
         }
+        // the screen's sound layer follows the output level (cm_face)
+        self.face.energy += energy;
+        self.face.samples += out.len();
     }
 }
 
@@ -1504,33 +1485,89 @@ pub extern "C" fn cm_body_ready(h: *const ChimeraMpc) -> i32 {
     })
 }
 
-/// What the screen shows now: `out[0]` the face strip's frame (the nearest of `face_postures`),
-/// `out[1]` the soft palate's frame (0..VELUM_FRAMES-1), `out[2]` the last drum sound heard
-/// (0 none, 1.. STEP_IDS: the screen's pads), `out[3]` a count that moves at every hit. Cheap;
-/// call it once a block.
+/// What the screen shows now: `out[0]` 0 (it was the old 33-pose face strip's frame; the Face
+/// parameter stays, unused), `out[1]` the soft palate's frame (0 shut, then 1..VELUM_FRAMES-1
+/// open), `out[2]` the last drum sound heard (0 none, 1.. STEP_IDS: the screen's pads), `out[3]` a
+/// count that moves at every hit. Cheap; call it once a block.
 #[unsafe(no_mangle)]
 pub extern "C" fn cm_display(h: *mut ChimeraMpc, out: *mut i32) {
     if out.is_null() {
         return;
     }
     guarded(h, |e| {
-        let x = &e.engine.voice().artic.x;
-        let mut best = (f64::INFINITY, 0usize);
-        for (i, a) in e.face.iter().enumerate() {
-            let d = posture_distance(x, a);
-            if d < best.0 {
-                best = (d, i);
-            }
-        }
-        let v = ((x.velum + 0.25) / 1.45 * (VELUM_FRAMES - 1) as f64).round().clamp(0.0, (VELUM_FRAMES - 1) as f64) as i32;
+        let v = face::velum_frame(e.engine.voice().artic.x.velum) as i32;
         // SAFETY: the caller gives room for 4 values
         unsafe {
-            *out = best.1 as i32;
+            *out = 0;
             *out.add(1) = v;
             *out.add(2) = e.hit_pad;
             *out.add(3) = e.hit_serial;
         }
     });
+}
+
+/// The face's layers now (see `face`): `out[0]` the jaw's frame, `out[1]` the tongue's, `out[2]`
+/// the upper lip's, `out[3]` the lower lip's (in the strip of the jaw shown), `out[4]` the
+/// larynx's, `out[5]` the sound level (0 silent, up to 5), from the output since the last call. A few hundred multiply-adds, nothing allocated;
+/// call it once a block.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_face(h: *mut ChimeraMpc, out: *mut i32) {
+    if out.is_null() {
+        return;
+    }
+    guarded(h, |e| {
+        let x = e.engine.voice().artic.x;
+        let t = face::tongue_frame(&x, e.face.tongue);
+        e.face.tongue = t;
+        let shown = [face::jaw_frame(x.jaw), t, face::upper_frame(&x, e.incisor), face::lower_frame(&x, e.incisor), face::larynx_frame(x.larynx), e.face.sound_frame(e.fs)];
+        // SAFETY: the caller gives room for 6 values
+        let o = unsafe { std::slice::from_raw_parts_mut(out, 6) };
+        for (o, s) in o.iter_mut().zip(shown) {
+            *o = s as i32;
+        }
+    });
+}
+
+/// How many frames each of `cm_face`'s layers has (6 values into `out`, the same order).
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_face_frames(out: *mut i32) {
+    if out.is_null() {
+        return;
+    }
+    // SAFETY: the caller gives room for 6 values
+    let o = unsafe { std::slice::from_raw_parts_mut(out, 6) };
+    for (o, n) in o.iter_mut().zip(face::FRAMES) {
+        *o = n as i32;
+    }
+}
+
+/// The frames `cm_face` reports for the rest posture (silent), in its order: the display
+/// parameters' defaults, so the screen shows the face at rest before the first report.
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_face_rest(out: *mut i32) {
+    if out.is_null() {
+        return;
+    }
+    let _ = catch_unwind(|| {
+        // the rest posture as the voice holds it: the tongue tip resting where the jaw and the
+        // tongue body put it
+        let mut a = chimera::anatomy::human::NEUTRAL;
+        let tip = chimera::anatomy::human::rest_tip(a.jaw, a.tb_x, a.tb_y);
+        (a.tt_x, a.tt_y) = (tip.x, tip.y);
+        let inc = male_incisor();
+        let shown = [face::jaw_frame(a.jaw), face::tongue_frame(&a, usize::MAX), face::upper_frame(&a, inc), face::lower_frame(&a, inc), face::larynx_frame(a.larynx), 0];
+        // SAFETY: the caller gives room for 6 values
+        let o = unsafe { std::slice::from_raw_parts_mut(out, 6) };
+        for (o, s) in o.iter_mut().zip(shown) {
+            *o = s as i32;
+        }
+    });
+}
+
+/// The voice's articulators now (for the offline tools: examples/fit_face.rs). Not for the plugin.
+pub fn live_artic(h: *const ChimeraMpc) -> Option<HumanArtic> {
+    // SAFETY: as in guarded
+    unsafe { h.as_ref() }.map(|e| e.engine.voice().artic.x)
 }
 
 /// 1 once a panic has silenced the engine.

@@ -21,11 +21,16 @@ Direction RowTopDown) or columns (each column one page of four, Bank Direction C
 Ink: everything with a glow is a baked PNG (Hershey Simplex captions, dials, the head); everything
 without a glow is text the MPC draws itself (Roboto Light / Regular Labels).
 
-The face is step 1 of the design's two-step plan: the static head (skin, skull, brain, eye, nasal
-cavity, palate, vertebrae, larynx) from CHIMERA's head template, ported into dump_face.rs so it
-shares the engine's coordinates, around today's moving parts: the opaque 33-pose mouth strip on
-the read-only "Face" parameter (it now also carries the chin, jaw, tongue fibres, rings and larynx
-of each pose) and the transparent soft-palate strip on "Velum Pos". No new display parameters.
+The face is step 2 of the design (B.6): the static head (skin, skull, brain, eye, nasal cavity,
+palate, vertebrae) from CHIMERA's head template, ported into dump_face.rs so it shares the engine's
+coordinates, and over it independent transparent layers, each a film strip on its own read-only
+parameter, bottom to top: the amber sound fan ("Sound Lvl", 6 steps), the larynx ("Larynx Pos"),
+the tongue ("Tongue Pos": real outlines clustered by engine/examples/fit_face.rs, its inside opaque
+black so the fan's lines end at its surface), the jaw ("Jaw Pos", drawn over the tongue), the soft
+palate ("Velum Pos"), the upper lip ("Lips Pos") and the lower lip ("Lower Lip": one strip per
+pair of jaw frames, shown with RangedEnabling while Jaw Pos is at either, so the lower lip sits on
+the jaw that is shown, at most half a jaw step off). The engine picks every frame
+(engine/src/face.rs); the old "Face" parameter stays, unused.
 
 No Max[...] handles (they crashed the MPC One+ in French 36).
 """
@@ -419,15 +424,87 @@ def handle_ring(ink, p, color, r, o=1.0):
         ink.line([a, b], color, 1.2, o)
 
 
-def draw_head(ink, fr):
-    """CHIMERA's face screen (docs/mockups/gen/lib.ts faceScreen) for one frame, without the soft
-    palate (its own strip) and without the pressure fan (step 2: it needs a sound-level parameter)"""
-    h = fr["head"]
+# The layers, bottom to top (design.md B.6; the jaw is drawn over the tongue so the tongue's opaque
+# inside never hides the teeth or the jaw bone): (name, read-only parameter)
+FACE_LAYERS = [("sound", "Sound Lvl"), ("larynx", "Larynx Pos"), ("tongue", "Tongue Pos"), ("jaw", "Jaw Pos"),
+               ("jaw_inset", "Jaw Pos"), ("velum", "Velum Pos"), ("upper", "Lips Pos"), ("lower", "Lower Lip")]
+SOUND_FRAMES = 6
+SOUND_LEVELS = [0.0, 0.22, 0.38, 0.56, 0.78, 1.0]   # the fan's brightness per Sound Lvl step
+FAN_MARGIN = 0.15                                    # cm the fan's lines reach into the lowest tongue
 
-    def L(name, color, w, o=1.0, closed=False, hot=False):
-        pts = [hp(p) for p in h[name]]
-        (ink.hot if hot else ink.line)(pts, color, w * WS, o, closed)
-    L("inset", BLUE_DIM, 0.9, 0.9)
+
+def static_prefix(polys, tol=1e-3):
+    """how many leading points every polyline shares"""
+    n = min(len(p) for p in polys)
+    for i in range(n):
+        p0 = polys[0][i]
+        if any(abs(p[i][0] - p0[0]) > tol or abs(p[i][1] - p0[1]) > tol for p in polys):
+            return i
+    return n
+
+
+def static_suffix(polys, tol=1e-3):
+    return static_prefix([list(reversed(p)) for p in polys], tol)
+
+
+def faded(ink, pts, color, w, o0, o1, hot=False):
+    """a polyline whose opacity runs from o0 to o1 (a soft joint between two layers)"""
+    n = len(pts) - 1
+    for i in range(n):
+        o = o0 + (o1 - o0) * (i + 0.5) / n
+        (ink.hot if hot else ink.line)([pts[i], pts[i + 1]], color, w, o)
+
+
+class FaceParts:
+    """Which part of each outline is static, from the frames of the layers that move it."""
+
+    def __init__(self, face):
+        self.face = face
+        # the upper skin from the top of the upper lip on (face and cranium) never moves
+        self.upper_static = static_suffix([fr["head"]["skin_upper"] for fr in face["upper"]])
+        # the neck's skin below the jaw's reach: still to within 0.8 mm (2 px, under a line's glow)
+        self.neck_static = static_prefix([fr["head"]["neck_front"] for fr in face["jaw"]], 0.08)
+        # the skin's inner line runs under the chin too: its middle moves with the jaw
+        inset = [fr["head"]["inset"] for fr in face["jaw"]]
+        self.inset_n = len(inset[0])
+        self.inset_pre, self.inset_suf = static_prefix(inset, 0.12), static_suffix(inset, 0.12)
+        # where its moving stretch turns up behind the lips: drawn as a strip of its own (on Jaw Pos
+        # too), so the jaw's strip stays the size of the jaw
+        rest_inset = face["rest"]["head"]["inset"]
+        self.inset_split = next((i for i in range(self.inset_pre, self.inset_n - self.inset_suf) if rest_inset[i][1] > 6.5),
+                                self.inset_n - self.inset_suf)
+        # the back wall up to the lowest the soft palate's lid starts, from the lowest glottis
+        self.wall_top = min(fr["head"]["wall"][-1][1] for fr in face["velum"])
+        self.wall_bottom = min(fr["glottis"][1] for fr in face["larynx"])
+
+
+def wall_run(wall, y0, y1):
+    """the wall's points between heights y0 and y1, cut exactly at both"""
+    out = []
+    if wall and y0 <= wall[0][1] <= y1:
+        out.append(tuple(wall[0]))
+    for p, q in zip(wall, wall[1:]):
+        if (p[1] - y0) * (q[1] - y0) < 0:
+            u = (y0 - p[1]) / (q[1] - p[1])
+            out.append((p[0] + u * (q[0] - p[0]), y0))
+        if (p[1] - y1) * (q[1] - y1) < 0:
+            u = (y1 - p[1]) / (q[1] - p[1])
+            out.append((p[0] + u * (q[0] - p[0]), y1))
+            return out
+        if y0 <= q[1] <= y1:
+            out.append(tuple(q))
+    return out
+
+
+def draw_static(ink, fp):
+    """the head around the moving parts: nothing in it moves"""
+    h = fp.face["rest"]["head"]
+
+    def L(name, color, w, o=1.0, closed=False):
+        ink.line([hp(p) for p in h[name]], color, w * WS, o, closed)
+    inset = [hp(p) for p in h["inset"]]
+    ink.line(inset[:fp.inset_pre], BLUE_DIM, 0.9 * WS, 0.9)
+    ink.line(inset[fp.inset_n - fp.inset_suf:], BLUE_DIM, 0.9 * WS, 0.9)
     L("skull", BLUE_DIM, 0.9)
     L("brain", BLUE_MID, 1.1)
     L("sulcus", BLUE_DIM, 0.9)
@@ -442,120 +519,249 @@ def draw_head(ink, fr):
         ink.line([hp(p) for p in t], BLUE_DIM, 0.9 * WS, closed=True)
     L("pal_oral", BLUE_MID, 1.1)
     L("pal_nasal", BLUE_MID, 1.1)
+    su = h["skin_upper"]
+    ink.hot([hp(p) for p in su[len(su) - fp.upper_static:]], BLUE, 1.7 * WS)
+    ink.hot([hp(p) for p in h["neck_front"][:fp.neck_static]], BLUE, 1.7 * WS)
+    # the back wall of the throat from the lowest larynx up to the soft palate's lid, and the hard palate
+    ink.hot([hp(p) for p in wall_run(h["wall"], fp.wall_bottom, fp.wall_top)], BLUE, 1.4 * WS)
+    ink.hot([hp(p) for p in h["palate"]], BLUE, 1.4 * WS)
+    L("upper_teeth", BLUE_MID, 1.1)
+
+
+def draw_larynx(ink, fr, fp):
+    h = fr["head"]
+
+    def L(name, color, w, o=1.0, closed=False):
+        ink.line([hp(p) for p in h[name]], color, w * WS, o, closed)
     L("hyoid", BLUE_DIM, 1.0)
     L("thyroid", BLUE_DIM, 1.0)
     L("trachea_l", BLUE_MID, 1.0)
     L("trachea_r", BLUE_MID, 1.0)
     for r in h["rings"]:
         ink.line([hp(p) for p in r], BLUE_DIM, 0.9 * WS, closed=True)
-    L("skin_lower", BLUE, 1.7, hot=True)
-    L("skin_upper", BLUE, 1.7, hot=True)
-    # the outer wall, minus the stretch along the soft palate (the palate's strip draws that)
-    for run in runs_away_from([tuple(p) for p in h["outer_wall"]], [tuple(p) for p in h["velum"]], 0.3):
-        ink.hot([hp(p) for p in run], BLUE, 1.4 * WS)
-    L("inner_wall", BLUE, 1.3, 0.9)
     L("glottis_wall", BLUE, 1.2, 0.8)
-    L("epiglottis", BLUE, 2.2, 0.85)
-    L("upper_teeth", BLUE_MID, 1.1)
-    L("lower_teeth", BLUE_MID, 1.1)
     L("fold_l", BLUE, 1.0, closed=True)
     L("fold_r", BLUE, 1.0, closed=True)
+    # the epiglottis from its base to its tip (the tongue draws it on to the tongue's root)
+    ink.line([hp(p) for p in h["epiglottis"][:2]], BLUE, 2.2 * WS, 0.85)
+    handle_ring(ink, fr["handles"]["larynx"], BLUE_MID, 5, 0.8)
+
+
+# the tongue outline (head["tongue"], closed): root 0-8, dorsum 9-39, blade 40-45, underside 46-50
+# (50 the frenulum, carried by the jaw), the floor 51-52 behind the lower teeth, then the first point again
+TONGUE_FREN = 50
+
+
+def draw_tongue(ink, fr, fp):
+    h = fr["head"]
     tongue = [hp(p) for p in h["tongue"]]
     ink.clipped(tongue, lambda d: [ink.line([hp(p) for p in fb], GREEN, 0.8 * WS, 0.32, draw=d) for fb in h["fibres"]])
-    ink.hot(tongue[:-1], GREEN, 1.6 * WS)
-    L("jaw_lower", RED, 1.5, hot=True)
-    L("jaw_upper", RED, 1.0, 0.45)
-    for lip in ("upper_lip", "lower_lip"):
-        ink.hot(chaikin([hp(p) for p in h[lip]], 1), PINK, 1.5 * WS)
+    ink.hot(tongue[:TONGUE_FREN - 3], GREEN, 1.6 * WS)
+    # the underside fades out toward the frenulum, where the jaw takes over (the two layers can
+    # differ there by the jaw's step)
+    faded(ink, tongue[TONGUE_FREN - 4:TONGUE_FREN + 1], GREEN, 1.6 * WS, 1.0, 0.15, hot=True)
+    ink.line([hp(p) for p in h["epiglottis"][1:]], BLUE, 2.2 * WS, 0.85)
+    ink.line([hp(p) for p in h["inner_wall"][1:4]], BLUE, 1.3 * WS, 0.9)
     hd = fr["handles"]
     handle_ring(ink, hd["tongue"], GREEN, 8)
-    handle_ring(ink, hd["jaw"], RED, 7, 0.95)
-    handle_ring(ink, hd["lips"], PINK, 7, 0.95)
     handle_ring(ink, hd["tip"], BLUE_MID, 5, 0.8)
-    handle_ring(ink, hd["larynx"], BLUE_MID, 5, 0.8)
 
 
-def draw_velum(ink, fr):
-    ink.line(chaikin([hp(p) for p in fr["head"]["velum"]], 3), WHITE, 1.25 * WS, 0.92)
+def tongue_fill(fr):
+    return [hp(p) for p in fr["head"]["tongue"]]
+
+
+def draw_jaw(ink, fr, fp):
+    h = fr["head"]
+    ink.hot([hp(p) for p in h["neck_front"][max(0, fp.neck_static - 1):]], BLUE, 1.7 * WS)
+    ink.line([hp(p) for p in h["inset"][max(0, fp.inset_pre - 1):fp.inset_split]], BLUE_DIM, 0.9 * WS, 0.9)
+    ink.hot([hp(p) for p in h["jaw_lower"]], RED, 1.5 * WS)
+    ink.line([hp(p) for p in h["jaw_upper"]], RED, 1.0 * WS, 0.45)
+    ink.line([hp(p) for p in h["lower_teeth"]], BLUE_MID, 1.1 * WS)
+    # the floor of the mouth under the tongue, fading in from the frenulum
+    t = [hp(p) for p in h["tongue"]]
+    faded(ink, t[TONGUE_FREN:TONGUE_FREN + 3], GREEN, 1.6 * WS, 0.3, 1.0, hot=True)
+    handle_ring(ink, fr["handles"]["jaw"], RED, 7, 0.95)
+
+
+def draw_jaw_inset(ink, fr, fp):
+    """the skin's inner line from the chin up behind the lips (it moves with the jaw)"""
+    ink.line([hp(p) for p in fr["head"]["inset"][fp.inset_split - 1:fp.inset_n - fp.inset_suf + 1]], BLUE_DIM, 0.9 * WS, 0.9)
+
+
+def draw_velum(ink, fr, fp):
+    h = fr["head"]
+    # the back wall above the static part, and the lid across to the uvula's tip
+    run = wall_run(h["wall"], fp.wall_top, 99.0) + [tuple(h["velum"][11])]
+    ink.hot([hp(p) for p in run], BLUE, 1.4 * WS)
+    ink.line(chaikin([hp(p) for p in h["velum"]], 3), WHITE, 1.25 * WS, 0.92)
     handle_ring(ink, fr["handles"]["velum"], WHITE, 6, 0.9)
 
 
-def split_box(mask):
-    """The changing pixels as one box, or two stacked boxes (mouth above, throat below) when that
-    is clearly smaller: the throat changes only in a narrow band, the mouth in a wide one."""
-    w, h = mask.size
-    rows = []
-    for y in range(h):
-        bb = mask.crop((0, y, w, y + 1)).getbbox()
-        rows.append((bb[0], bb[2]) if bb else None)
-    ys = [y for y in range(h) if rows[y]]
-    y0, y1 = ys[0], ys[-1] + 1
+def draw_upper(ink, fr, fp):
+    h = fr["head"]
+    su = h["skin_upper"]
+    ink.hot([hp(p) for p in su[:len(su) - fp.upper_static + 1]], BLUE, 1.7 * WS)
+    ink.hot(chaikin([hp(p) for p in h["upper_lip"]], 1), PINK, 1.5 * WS)
 
-    def box(a, b):
-        xs = [rows[y] for y in range(a, b) if rows[y]]
-        if not xs:
-            return None
-        return (min(x[0] for x in xs), a, max(x[1] for x in xs), b)
 
-    def area(bx):
-        return 0 if bx is None else (bx[2] - bx[0]) * (bx[3] - bx[1])
-    one = box(y0, y1)
-    best, best_area = [one], area(one)
-    for s in range(y0 + 8, y1 - 8):
-        a, b = box(y0, s), box(s, y1)
-        if a and b and area(a) + area(b) < best_area * 0.9 and area(a) + area(b) < area(best[0]) + (area(best[1]) if len(best) > 1 else 0):
-            best, best_area = [a, b], area(a) + area(b)
-    pad = 2
-    return [(max(0, x0 - pad), max(0, y0_ - (pad if i == 0 else 0)), min(w, x1 + pad), min(h, y1_ + (pad if i == len(best) - 1 else 0)))
-            for i, (x0, y0_, x1, y1_) in enumerate(best)]
+def draw_lower(ink, fr, fp):
+    h = fr["head"]
+    sl = h["skin_lower"]
+    ink.hot([hp(p) for p in sl[len(h["neck_front"]) - 1:]], BLUE, 1.7 * WS)
+    ink.hot(chaikin([hp(p) for p in h["lower_lip"]], 1), PINK, 1.5 * WS)
+    handle_ring(ink, fr["handles"]["lips"], PINK, 7, 0.95)
+
+
+def ray_hits(o, d, poly):
+    """distances along the ray o + t d (t > 0) where it crosses the closed polygon's edges, sorted"""
+    out = []
+    for a, b in zip(poly, poly[1:] + poly[:1]):
+        ex, ey = b[0] - a[0], b[1] - a[1]
+        den = d[0] * ey - d[1] * ex
+        if abs(den) < 1e-12:
+            continue
+        wx, wy = a[0] - o[0], a[1] - o[1]
+        t = (wx * ey - wy * ex) / den
+        u = (wx * d[1] - wy * d[0]) / den
+        if t > 1e-9 and 0.0 <= u < 1.0:
+            out.append(t)
+    return sorted(out)
+
+
+def fan_lines(face):
+    """The amber fan: the tract's cross-section lines at rest (the throat's and the mouth's), from the
+    back wall and the roof down toward the tongue, drawn long enough to reach the lowest tongue frame
+    and ending inside every frame, so the tongue's opaque inside makes them end at its surface."""
+    tongues = [[tuple(p) for p in fr["head"]["tongue"][:-1]] for fr in face["tongue"]]
+    lines, short = [], 0
+    for ox, oy, ix, iy, region in face["rest"]["grid"]:
+        if region not in (1, 2):
+            continue
+        dx, dy = ix - ox, iy - oy
+        n = math.hypot(dx, dy)
+        if n < 1e-6:
+            continue
+        d = (dx / n, dy / n)
+        enter, leave, missed = [], [], False
+        for poly in tongues:
+            hits = ray_hits((ox, oy), d, poly)
+            if len(hits) < 2:
+                missed = True
+                continue
+            enter.append(hits[0])
+            leave.append(hits[1])
+        if missed or not enter:
+            end = n    # a line some tongue never reaches (below its root): to the surface at rest
+        else:
+            end = min(max(enter) + FAN_MARGIN, min(leave) - 0.05)
+            short += max(enter) > end
+        lines.append([(ox, oy), (ox + d[0] * end, oy + d[1] * end)])
+    return lines, short
+
+
+def draw_fan(ink, lines, level):
+    o = SOUND_LEVELS[level]
+    if o <= 0:
+        return
+    for ln in lines:
+        pts = [hp(p) for p in ln]
+        if level >= 4:
+            ink.hot(pts, AMBER, 1.15, o)
+        else:
+            ink.line(pts, AMBER, 1.1, o)
+
+
+def layer_image(draw, fill=None):
+    """one frame over the whole head box, transparent; `fill` (page px polygon) is opaque black"""
+    bw, bh = HEAD_BOX[2], HEAD_BOX[3]
+    ink = Ink(bw, bh)
+    draw(ink)
+    rgb = ink.render()
+    img = key_out(rgb)
+    if fill:
+        mask = Image.new("L", (bw * SS, bh * SS), 0)
+        ImageDraw.Draw(mask).polygon([(x * SS, y * SS) for x, y in fill], fill=255)
+        mask = mask.resize((bw, bh), Image.LANCZOS)
+        img = Image.composite(rgb.convert("RGBA"), img, mask)
+    return img
+
+
+def strip_of(name, frames):
+    """the frames cropped to their common box, stacked; returns (file, bounds in page px, count)"""
+    box = None
+    for img in frames:
+        bb = img.getbbox()
+        if bb:
+            box = bb if box is None else (min(box[0], bb[0]), min(box[1], bb[1]), max(box[2], bb[2]), max(box[3], bb[3]))
+    box = box or (0, 0, 1, 1)
+    w, h = box[2] - box[0], box[3] - box[1]
+    strip = Image.new("RGBA", (w, h * len(frames)), (0, 0, 0, 0))
+    for k, img in enumerate(frames):
+        strip.paste(img.crop(box), (0, k * h))
+    put(name, strip)
+    return name, (HEAD_BOX[0] + box[0], HEAD_BOX[1] + box[1], w, h), len(frames)
 
 
 def make_face(face):
-    """The head (static, transparent), the mouth strip (opaque, the box where any pose differs from
-    rest) and the soft palate strip (transparent). Returns their placements in page px."""
-    bw, bh = HEAD_BOX[2], HEAD_BOX[3]
-
-    def head_rgb(fr):
-        ink = Ink(bw, bh)
-        draw_head(ink, fr)
-        return ink.render()
-    rest = head_rgb(face["rest"])
-    poses = [head_rgb(fr) for fr in face["face"]]
-    # where any pose differs from rest: those pixels must come from the opaque strips
-    mask = Image.new("L", (bw, bh), 0)
-    for img in poses:
-        r, g, b = ImageChops.difference(img, rest).split()
-        mask = ImageChops.lighter(mask, ImageChops.lighter(ImageChops.lighter(r, g), b).point(lambda v: 255 if v > 10 else 0))
-    boxes = split_box(mask)
-    strips = []
-    for name, box in zip(("face_mouth.png", "face_throat.png"), boxes):
-        mw, mh = box[2] - box[0], box[3] - box[1]
-        strip = Image.new("RGB", (mw, mh * len(poses)), (0, 0, 0))
-        for k, img in enumerate(poses):
-            strip.paste(img.crop(box), (0, k * mh))
-        put(name, strip)
-        strips.append((name, (HEAD_BOX[0] + box[0], HEAD_BOX[1] + box[1], mw, mh)))
-    head = key_out(rest)
+    """The head (static) and every moving layer's strip. Returns the placements in page px, in draw
+    order: (name, file, frames, parameter, bounds, when), `when` = (first jaw frame, last, jaw frames)
+    for the lower lip's strips (one per pair of jaw frames, shown while Jaw Pos is at either), else
+    None; and the pictures for the posture previews."""
+    fp = FaceParts(face)
+    head = layer_image(lambda ink: draw_static(ink, fp))
     hb = head.getbbox()
     put("face_head.png", head.crop(hb))
-    vel = []
-    for fr in face["velum"]:
-        ink = Ink(bw, bh)
-        draw_velum(ink, fr)
-        vel.append(ink.rgba())
-    vb = None
-    for img in vel:
-        bb = img.getbbox()
-        vb = bb if vb is None else (min(vb[0], bb[0]), min(vb[1], bb[1]), max(vb[2], bb[2]), max(vb[3], bb[3]))
-    vw, vh = vb[2] - vb[0], vb[3] - vb[1]
-    vstrip = Image.new("RGBA", (vw, vh * len(vel)), (0, 0, 0, 0))
-    for k, img in enumerate(vel):
-        vstrip.paste(img.crop(vb), (0, k * vh))
-    put("face_velum.png", vstrip)
-    ox, oy = HEAD_BOX[0], HEAD_BOX[1]
-    return {"head": (ox + hb[0], oy + hb[1], hb[2] - hb[0], hb[3] - hb[1]),
-            "strips": strips, "mouth_frames": len(poses),
-            "velum": (ox + vb[0], oy + vb[1], vw, vh), "velum_frames": len(vel)}
+    fan, short = fan_lines(face)
+    out = {"head": (HEAD_BOX[0] + hb[0], HEAD_BOX[1] + hb[1], hb[2] - hb[0], hb[3] - hb[1]), "layers": [],
+           "fan_lines": len(fan), "fan_short": short}
+    frames = {}
+    frames["sound"] = [layer_image(lambda ink, k=k: draw_fan(ink, fan, k)) for k in range(SOUND_FRAMES)]
+    frames["larynx"] = [layer_image(lambda ink, fr=fr: draw_larynx(ink, fr, fp)) for fr in face["larynx"]]
+    frames["tongue"] = [layer_image(lambda ink, fr=fr: draw_tongue(ink, fr, fp), tongue_fill(fr)) for fr in face["tongue"]]
+    frames["jaw"] = [layer_image(lambda ink, fr=fr: draw_jaw(ink, fr, fp)) for fr in face["jaw"]]
+    frames["jaw_inset"] = [layer_image(lambda ink, fr=fr: draw_jaw_inset(ink, fr, fp)) for fr in face["jaw"]]
+    frames["velum"] = [layer_image(lambda ink, fr=fr: draw_velum(ink, fr, fp)) for fr in face["velum"]]
+    frames["upper"] = [layer_image(lambda ink, fr=fr: draw_upper(ink, fr, fp)) for fr in face["upper"]]
+    frames["lower"] = [[layer_image(lambda ink, fr=fr: draw_lower(ink, fr, fp)) for fr in group] for group in face["lower"]]
+    nj = len(face["jaw"])
+    for name, param in FACE_LAYERS:
+        if name == "lower":
+            for g, group in enumerate(frames["lower"]):
+                f, bounds, n = strip_of("face_lower_%d.png" % g, group)
+                out["layers"].append(("lower lip %d" % g, f, n, param, bounds, (2 * g, min(2 * g + 1, nj - 1), nj)))
+        else:
+            f, bounds, n = strip_of("face_%s.png" % name, frames[name])
+            out["layers"].append((name, f, n, param, bounds, None))
+    out["pictures"] = (head, frames)
+    return out
+
+
+def posture_previews(face, placements):
+    """build/preview/face_<posture>.png: the head box with the frames the engine picks for each check
+    posture (dump_face.rs; "a_loud" with the sound fan lit), and face_<posture>_check.png with the
+    posture's true tongue, jaw and lips outlines over it in thin white, to judge how the layers line up"""
+    head, frames = placements["pictures"]
+    bw, bh = HEAD_BOX[2], HEAD_BOX[3]
+    written = []
+    for name, ps in face["postures"].items():
+        jaw, tongue, upper, lower, larynx, velum = ps["frames"]
+        for sound in ((0, 5) if name == "a" else (0,)):
+            img = Image.new("RGBA", (bw, bh), (0, 0, 0, 255))
+            for layer in (head, frames["sound"][sound], frames["larynx"][larynx], frames["tongue"][tongue],
+                          frames["jaw"][jaw], frames["jaw_inset"][jaw], frames["velum"][velum], frames["upper"][upper], frames["lower"][jaw // 2][lower]):
+                img.alpha_composite(layer)
+            tag = name + ("_loud" if sound else "")
+            img.convert("RGB").save(os.path.join(PREVIEW, "face_%s.png" % tag))
+            written.append(tag)
+            if sound:
+                continue
+            h = ps["true"]["head"]
+            d = ImageDraw.Draw(img)
+            for part in ("tongue", "lower_lip", "upper_lip", "jaw_lower", "lower_teeth"):
+                d.line([hp(p) for p in h[part]], fill=(255, 255, 255, 255), width=1)
+            img.convert("RGB").save(os.path.join(PREVIEW, "face_%s_check.png" % tag))
+    return written
 
 
 # --------------------------------------------------------------------------------------------
@@ -686,10 +892,12 @@ def image_entry(name, image, bounds, when=None):
     return G.entry(name, "Image", data, rect_str(*bounds), "No", "Show", "Always", invalidating=inv)
 
 
-def film_entry(name, image, frames, handle, bounds):
+def film_entry(name, image, frames, handle, bounds, when=None):
+    """when: an enabling handle (RangedEnabling/...): shown only while it is valid"""
     data = G.obj(("version", 2), ("imageType", "FilmStrip"), ("colour", "0"), ("image", image),
                  ("numFrames", frames), ("handleName", "Data"))
-    return G.entry(name, "Image", data, rect_str(*bounds), "No", "Show", "Always", remap=[("Data", handle)])
+    inv = [when] if when else None
+    return G.entry(name, "Image", data, rect_str(*bounds), "No", "Show", "Always", remap=[("Data", handle)], invalidating=inv)
 
 
 def focus_entry(color, w, h):
@@ -749,10 +957,10 @@ class Builder:
         img = IMAGES[f]
         ch.append(image_entry(f, f, (x, y, img.width, img.height)))
 
-    def label(self, ch, p, bounds, px, color, just="horizontallyCentred verticallyCentred", style="Light"):
+    def label(self, ch, p, bounds, px, color, just="horizontallyCentred verticallyCentred", style="Light", invalidating=None):
         self.ref(p)
         ch.append(G.entry("value " + p.name, "Label", label_data("Value", argb(color), px, just, style), rect_str(*bounds),
-                          "No", "Show", "Always", remap=[("Data", p.handle)]))
+                          "No", "Show", "Always", remap=[("Data", p.handle)], invalidating=invalidating))
 
     def button(self, ch, p, on, off, k, n, x, y, momentary=False, name=None):
         self.ref(p)
@@ -902,9 +1110,10 @@ def face_screen(b, ch, page, face):
     f, m, w, h = body_caption_strip(page["sub_word"])
     ch.append(film_entry("body caption", f, 4, b.ref(params["Body"]).handle, (tx - m, TOP + 9 - m, w, h)))
     ch.append(image_entry("head", "face_head.png", face["head"]))
-    for name, bounds in face["strips"]:
-        ch.append(film_entry(name[:-4], name, face["mouth_frames"], b.ref(params["Face"]).handle, bounds))
-    ch.append(film_entry("velum", "face_velum.png", face["velum_frames"], b.ref(params["Velum Pos"]).handle, face["velum"]))
+    jaw = b.ref(params["Jaw Pos"])
+    for name, f, n, pname, bounds, when in face["layers"]:
+        ch.append(film_entry(name, f, n, b.ref(params[pname]).handle, bounds,
+                             ("RangedEnabling/%d/%d/%d/%s" % (when + (jaw.handle,))) if when else None))
     if page.get("readouts"):
         # the slot readouts under the chin (design.md B.3), as live values of the knobs that set them;
         # TONGUE (nearest vowel) needs a new display parameter and is left for step 2
@@ -918,7 +1127,19 @@ def face_screen(b, ch, page, face):
                 ink.circle(mm + 5, mm + 7, 4.5, color, fill=True),
                 ink.cap(mm + 16 + ink.cap(mm + 16, mm, lab, 13, color, "l", 0.12) + 7, mm + 1, unit, 12, color, "l", 0.1, 0.7)), prefix="ro")
             b.pic(ch, fdot, cx + dx, cy + dy)
-            b.label(ch, params[pname], (cx - 2, cy + 15, 126, 42), 34, light(color), "left verticallyCentred")
+            if pname != "Soft Palate":
+                b.label(ch, params[pname], (cx - 2, cy + 15, 126, 42), 34, light(color), "left verticallyCentred")
+                continue
+            # the soft palate says "Shut" while the port is closed (Velum Pos at its frame 0), its
+            # value otherwise
+            vp = b.ref(params["Velum Pos"])
+            nv = face["velum_frames"]
+            b.label(ch, params[pname], (cx - 2, cy + 15, 126, 42), 34, light(color), "left verticallyCentred",
+                    invalidating=["RangedEnabling/1/%d/%d/%s" % (nv - 1, nv, vp.handle)])
+            fs, sx, sy = baked(("shut", color), 120, 40, lambda ink, mm, color=color: ink.cap(mm, mm, "SHUT", 26, light(color), "l", 0.12),
+                               prefix="ro")
+            img = IMAGES[fs]
+            ch.append(image_entry("shut", fs, (cx + sx, cy + 23 + sy, img.width, img.height), when=(0, nv, vp.handle)))
     if page.get("credit"):
         # in front of the neck, like the readouts
         cx, just = (SX + 16, "l") if FACE_LEFT else (SX + SW - 16, "r")
@@ -1157,12 +1378,16 @@ class Previewer:
         return p.display or PREVIEW_SAMPLE.get(p.name, "")
 
     def enabled(self, h):
-        """IndexedEnabling/<choice>/<n>/<handle> at the parameters' defaults"""
+        """IndexedEnabling/<choice>/<n>/<handle> and RangedEnabling/<min>/<max>/<n>/<handle> at the
+        parameters' defaults"""
         parts = h.split("/")
-        if parts[0] != "IndexedEnabling":
-            return True
-        k, n, hd = int(parts[1]), int(parts[2]), "/".join(parts[3:])
-        return int(round(self.value(hd) * (n - 1))) == k
+        if parts[0] == "IndexedEnabling":
+            k, n, hd = int(parts[1]), int(parts[2]), "/".join(parts[3:])
+            return int(round(self.value(hd) * (n - 1))) == k
+        if parts[0] == "RangedEnabling":
+            lo, hi, n, hd = int(parts[1]), int(parts[2]), int(parts[3]), "/".join(parts[4:])
+            return lo <= int(round(self.value(hd) * (n - 1))) <= hi
+        return True
 
     def draw(self, tab):
         img = Image.new("RGBA", (W, H), (0, 0, 0, 255))
@@ -1251,8 +1476,8 @@ def main():
                     sys.exit('make_skin: page %s uses unknown parameter "%s"' % (page["name"], n))
     with open(FACE, encoding="utf-8") as f:
         face = json.load(f)
-    if "head" not in face["rest"]:
-        sys.exit("make_skin: build/face.json has no head outlines; rerun the engine's dump_face example")
+    if "head" not in face["rest"] or "lower" not in face:
+        sys.exit("make_skin: build/face.json has no layer frames; rerun the engine's dump_face example")
     os.makedirs(SKINS, exist_ok=True)
     os.makedirs(PREVIEW, exist_ok=True)
     for f in os.listdir(SKINS):
@@ -1265,12 +1490,13 @@ def main():
     global DIAL_STRIPS
     DIAL_STRIPS = [dial_strip(c) for c in SLOTS]
     placements = make_face(face)
+    placements["velum_frames"] = len(face["velum"])
     put("puck.png", _puck())
     tui, qmaps, b = build_tui(params, units, placements)
 
-    # every parameter the skin must reach is on some page
+    # every parameter the skin must reach is on some page (Face, the old 33-pose strip, stays unused)
     shown = set(b.referenced)
-    missing = [p.name for p in plist if p.index not in shown]
+    missing = [p.name for p in plist if p.index not in shown and p.name != "Face"]
     if missing:
         sys.exit("make_skin: not on any page: %s" % ", ".join(missing))
 
@@ -1294,6 +1520,7 @@ def main():
     if on_disk - used:
         sys.exit("make_skin: unused on disk: %s" % ", ".join(sorted(on_disk - used)))
 
+    postures = posture_previews(face, placements)
     pv = Previewer(tui, {p.index: p for p in plist})
     for pi, (page, tab) in enumerate(zip(PAGES, pv.tabs)):
         pv.draw(tab).convert("RGB").save(os.path.join(PREVIEW, "page_%d_%s.png" % (pi + 1, page["name"].lower())))
@@ -1306,9 +1533,12 @@ def main():
     big = sorted(((IMAGES[n].width * IMAGES[n].height * 4, n) for n in IMAGES), reverse=True)[:5]
     print("make_skin: %d pictures, %.0f KB on disk, %.2f MB decoded (%s); grouping %s; previews in %s"
           % (len(on_disk), disk / 1024.0, decoded / 1e6, ", ".join("%s %.2f MB" % (n, s / 1e6) for s, n in big), GROUPING, PREVIEW))
-    print("make_skin: face strips on Face (%d frames): %s; head at %s; soft palate %d x %d x %d"
-          % (placements["mouth_frames"], ", ".join("%s %s" % (n, b) for n, b in placements["strips"]), placements["head"],
-             placements["velum"][2], placements["velum"][3], placements["velum_frames"]))
+    face_mb = sum(IMAGES[f].width * IMAGES[f].height * 4 for _, f, _, _, _, _ in placements["layers"]) / 1e6
+    print("make_skin: the face: head %s, %d layer strips %.2f MB decoded (%s); fan %d lines (%d end short of the lowest tongue); "
+          "posture previews face_<%s>.png"
+          % (placements["head"], len(placements["layers"]), face_mb,
+             ", ".join("%s %dx%dx%d" % (n, bd[2], bd[3], k) for n, _, k, _, bd, w in placements["layers"]),
+             placements["fan_lines"], placements["fan_short"], "|".join(postures)))
 
 
 def _puck():

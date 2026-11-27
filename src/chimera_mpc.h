@@ -62,10 +62,20 @@ void cm_render(ChimeraMpc* engine, float* out, int n);
 int cm_lyrics_ready(const ChimeraMpc* engine);
 // 1 when the voice playing is the body the parameters ask for (a Blend takes a moment).
 int cm_body_ready(const ChimeraMpc* engine);
-// What the screen shows now: out[0] the face strip's frame, out[1] the soft palate's frame,
-// out[2] the last drum sound heard (0 none, 1..10 as the Pad parameter), out[3] a count that
-// moves at every hit.
+// What the screen shows now: out[0] 0 (it was the old face strip's frame), out[1] the soft
+// palate's frame (0 shut, then open), out[2] the last drum sound heard (0 none, 1..10 as the Pad
+// parameter), out[3] a count that moves at every hit.
 void cm_display(ChimeraMpc* engine, int* out4);
+// The face's layers now: out[0] the jaw's frame, out[1] the tongue's, out[2] the upper lip's,
+// out[3] the lower lip's (in the strip of the jaw shown), out[4] the larynx's, out[5] the sound
+// level (0 silent .. 5), from the output since the last call. Once a block, on the audio thread;
+// allocates nothing.
+void cm_face(ChimeraMpc* engine, int* out6);
+// How many frames each of cm_face's layers has, in the same order (any thread).
+void cm_face_frames(int* out6);
+// The frames cm_face reports for the rest posture, silent (the display parameters' defaults).
+// Allocates (call it outside the audio callback).
+void cm_face_rest(int* out6);
 // A tap on a momentary control: parameter index (Key, Pad, Consonant or Speak) and the step it was
 // set to. The audio thread; those parameters then go to cm_set_params as 0.
 void cm_tap(ChimeraMpc* engine, int index, int value);

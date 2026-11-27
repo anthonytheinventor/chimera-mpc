@@ -1,7 +1,8 @@
 //! The outlines the skin's face is drawn from, as JSON on stdout (tools/make_skin.py reads it):
-//! the male body's tract at rest ("rest", for the parts that stay put), at each of the face
-//! strip's postures ("face", the same list the plugin picks frames from) and at each soft palate
-//! frame ("velum"). Points are body centimeters (x forward, y up).
+//! the male body's tract at rest ("rest", for the parts that stay put) and at every frame of each
+//! moving layer, from the same functions the engine picks frames with (src/face.rs): "jaw",
+//! "larynx", "velum", "tongue" (the clustered outlines in src/face_tables.rs), "upper" (the upper
+//! lip) and "lower" (the lower lip: one list per pair of jaw frames). Points are body centimeters (x forward, y up).
 //!
 //! Each frame also carries "head": the head around the tract (skin, skull, brain, eye, nasal
 //! cavity, palate, vertebrae, larynx, tongue fibres...), ported from CHIMERA's head template
@@ -10,9 +11,15 @@
 //! mapping as the airway, so the head lines up with the moving mouth exactly.
 //!
 //!     cargo run --release --example dump_face > ../build/face.json
+//!
+//! Each frame also has "wall" (the back wall of the throat up to the soft palate's lid), "palate"
+//! (the hard palate's landmarks), "neck_front" (the skin under the chin, part of skin_lower) and
+//! "grid" (the tract's cross-section lines: outer point, inner point, region), from which the
+//! skin draws the amber sound fan.
 use chimera::anatomy::geom::{Vec2, catmull_rom, dist, rotate_about, v};
-use chimera::anatomy::human::{BODY_MALE, HumanArtic, HumanFrame, HumanVocalTract, NEUTRAL};
-use chimera_mpc_engine::{VELUM_FRAMES, face_postures, velum_frame_value};
+use chimera::anatomy::human::{BODY_MALE, HumanArtic, HumanFrame, HumanVocalTract, NEUTRAL, rest_tip};
+use chimera::phonetics::planner::vowel_table;
+use chimera_mpc_engine::face;
 use std::f64::consts::PI;
 
 fn pts(v: &[Vec2]) -> String {
@@ -73,7 +80,12 @@ fn head_json(t: &HumanVocalTract, f: &HumanFrame, a: &HumanArtic) -> String {
     let ul_out: Vec<Vec2> = f.upper_lip[7..].to_vec();
     let mut ll_out: Vec<Vec2> = f.lower_lip[7..].to_vec();
     ll_out.reverse();
-    let neck_front = catmull_rom(&[b(2.3, -4.6), b(2.38, -1.5), b(2.52, 0.4), b(3.0, 1.7), j(5.3, 3.0), j(7.25, 3.35), j(7.95, 4.6), j(7.55, 5.7)], 4);
+    // MPC port: the throat point under the chin comes down and back with a wide-open jaw (CHIMERA's
+    // template keeps it at (3.0, 1.7), and the skin hooked round it once the chin swung below and
+    // behind it); at rest and for most of the jaw's range it stays where the template has it
+    let chin = j(5.3, 3.0);
+    let throat = b(3.0f64.min(0.5 * (2.52 + chin.x / k)), 1.7f64.min(chin.y / k - 0.3));
+    let neck_front = catmull_rom(&[b(2.3, -4.6), b(2.38, -1.5), b(2.52, 0.4), throat, j(5.3, 3.0), j(7.25, 3.35), j(7.95, 4.6), j(7.55, 5.7)], 4);
     let face = catmull_rom(&[*ul_out.last().unwrap(), b(7.05, 10.6), b(7.75, 10.78), b(8.75, 11.05), b(9.25, 11.65), b(8.95, 12.6), b(8.35, 13.9), b(7.7, 15.0), b(7.95, 16.1), b(7.9, 18.1), b(6.9, 20.5)], 4);
     let cranium = catmull_rom(&[b(6.9, 20.5), b(3.0, 22.9), b(-2.2, 22.7), b(-6.9, 19.6), b(-8.7, 15.4), b(-8.3, 11.9), b(-7.4, 8.9), b(-6.8, 4.8), b(-6.6, 0.0), b(-6.6, -4.6)], 4);
     // the face (nose, brow, forehead) on its own, from the nose's base: it does not move with the lips
@@ -166,6 +178,10 @@ fn head_json(t: &HumanVocalTract, f: &HumanFrame, a: &HumanArtic) -> String {
         ("glottis_wall", vec![wall_at_glottis, glottis_top]),
         ("inner_wall", f.inner.clone()),
         ("tongue", closed(&f.tongue)),
+        ("neck_front", neck_front.clone()),
+        // the back wall: the outer contour up to the uvula's tip (where the soft palate's oral side starts)
+        ("wall", f.outer[..f.outer.iter().position(|q| dist(*q, f.velum[11]) < 1e-9).unwrap_or(f.outer.len())].to_vec()),
+        ("palate", t.palate().to_vec()),
         ("upper_lip", closed(&f.upper_lip)),
         ("lower_lip", closed(&f.lower_lip)),
         ("upper_teeth", closed(&f.upper_teeth)),
@@ -208,19 +224,77 @@ fn frame_json(t: &mut HumanVocalTract, a: &HumanArtic) -> String {
     ];
     let body: Vec<String> = parts.iter().map(|(k, v)| format!("\"{k}\":{}", pts(v))).collect();
     let head = head_json(t, &f, a);
-    format!("{{{},\"glottis\":[{:.4},{:.4}],{head}}}", body.join(","), f.glottis.x, f.glottis.y)
+    let grid: Vec<String> = f.grid.iter().map(|g| format!("[{:.4},{:.4},{:.4},{:.4},{}]", g.outer.x, g.outer.y, g.inner.x, g.inner.y, g.region)).collect();
+    format!("{{{},\"glottis\":[{:.4},{:.4}],\"grid\":[{}],{head}}}", body.join(","), f.glottis.x, f.glottis.y, grid.join(","))
 }
 
 fn main() {
     let mut t = HumanVocalTract::new(BODY_MALE);
+    let frames = |list: Vec<HumanArtic>, t: &mut HumanVocalTract| -> String {
+        let v: Vec<String> = list.iter().map(|a| frame_json(t, a)).collect();
+        format!("[{}]", v.join(","))
+    };
+    let with = |f: &dyn Fn(&mut HumanArtic)| {
+        let mut a = NEUTRAL;
+        f(&mut a);
+        a
+    };
     let rest = frame_json(&mut t, &NEUTRAL);
-    let face: Vec<String> = face_postures().iter().map(|a| frame_json(&mut t, a)).collect();
-    let velum: Vec<String> = (0..VELUM_FRAMES)
-        .map(|i| {
-            let mut a = NEUTRAL;
-            a.velum = velum_frame_value(i);
-            frame_json(&mut t, &a)
+    let jaw = frames((0..face::JAW_FRAMES).map(|i| with(&|a| a.jaw = face::jaw_value(i))).collect(), &mut t);
+    let larynx = frames((0..face::LARYNX_FRAMES).map(|i| with(&|a| a.larynx = face::larynx_value(i))).collect(), &mut t);
+    let velum = frames((0..face::VELUM_FRAMES).map(|i| with(&|a| a.velum = face::velum_value(i))).collect(), &mut t);
+    let tongue = frames((0..face::TONGUE_FRAMES).map(face::tongue_value).collect(), &mut t);
+    let upper = frames(
+        (0..face::UPPER_FRAMES)
+            .map(|i| {
+                let (ap, prot) = face::upper_value(i);
+                with(&|a| {
+                    a.lip_ap = ap;
+                    a.lip_prot = prot;
+                })
+            })
+            .collect(),
+        &mut t,
+    );
+    let lower: Vec<String> = (0..face::LOWER_GATES)
+        .map(|g| {
+            let list = (0..face::LOWER_FRAMES)
+                .map(|i| {
+                    let (ap, prot) = face::lower_value(i);
+                    with(&|a| {
+                        a.jaw = face::lower_gate_jaw(g);
+                        a.lip_ap = ap;
+                        a.lip_prot = prot;
+                    })
+                })
+                .collect();
+            frames(list, &mut t)
         })
         .collect();
-    println!("{{\"rest\":{rest},\"face\":[{}],\"velum\":[{}]}}", face.join(","), velum.join(","));
+    // postures to judge the layers by: the frames the engine picks for each, and its true outline
+    let incisor = t.palate().last().map(|q| (q.x, q.y)).unwrap();
+    let vowel = |ipa: &str| vowel_table().get("male").and_then(|v| v.get(ipa)).map(|v| v.artic.apply_to(&NEUTRAL)).unwrap_or(NEUTRAL);
+    let mut checks: Vec<(&str, HumanArtic)> = vec![("rest", NEUTRAL), ("a", vowel("ɑ")), ("i", vowel("i")), ("u", vowel("u"))];
+    // a closed consonant: the lips pressed shut for /p/
+    checks.push(("p", with(&|a| {
+        a.lip_ap = -0.2;
+        a.jaw = 0.35;
+    })));
+    // the tongue tip rests where the jaw and the tongue body put it, as the voice holds it
+    for (_, a) in checks.iter_mut() {
+        let tip = rest_tip(a.jaw, a.tb_x, a.tb_y);
+        (a.tt_x, a.tt_y) = (tip.x, tip.y);
+    }
+    let posture: Vec<String> = checks
+        .iter()
+        .map(|(name, a)| {
+            let pick = [face::jaw_frame(a.jaw), face::tongue_frame(a, usize::MAX), face::upper_frame(a, incisor), face::lower_frame(a, incisor), face::larynx_frame(a.larynx), face::velum_frame(a.velum)];
+            format!("\"{name}\":{{\"frames\":{:?},\"true\":{}}}", pick, frame_json(&mut t, a))
+        })
+        .collect();
+    println!(
+        "{{\"rest\":{rest},\"jaw\":{jaw},\"larynx\":{larynx},\"velum\":{velum},\"tongue\":{tongue},\"upper\":{upper},\"lower\":[{}],\"postures\":{{{}}}}}",
+        lower.join(","),
+        posture.join(",")
+    );
 }

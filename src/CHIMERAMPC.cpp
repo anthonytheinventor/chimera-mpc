@@ -102,28 +102,36 @@ enum ParamIndex
     kPad,           // Beatbox: hit a sound now (on its rise)
     kNumSettings,
     // read-only displays for the skin (not automatable; the helper thread writes them)
-    kVisFace = kNumSettings,   // the face strip's frame (the nearest mouth posture)
-    kVisVelum,                 // the soft palate strip's frame
+    kVisFace = kNumSettings,   // the old 33-pose face strip's frame: no longer shown or reported (ids are permanent)
+    kVisVelum,                 // the soft palate strip's frame (0 shut, then open)
     // typing words on the MPC
-    kTypeInto,                 // Speech / Lyrics: which texts the keys edit
+    kTypeInto,                 // Speak / Sing: which texts the keys edit (Speak's lines or Sing's lyrics)
     kTypeSlot,                 // 1..8: which slot
     kKey,                      // one key (on a change to it): the letters, punctuation, Del, Line, Clear
     kTyped,                    // read-only: its text is the end of the slot being typed (formatValue)
     kHit,                      // read-only: the pad to light on the screen (0 none, 1..10 as Pad)
+    // read-only: the face's moving layers, each a film strip (engine/src/face.rs picks the frames)
+    kVisJaw,                   // the jaw's frame (jaw 0..2.4 cm)
+    kVisTongue,                // the tongue's frame (the nearest of the outlines clustered offline)
+    kVisLips,                  // the upper lip's frame (its edge's height x how far forward)
+    kVisLowerLip,              // the lower lip's frame (opening x how far forward; a strip per pair of jaw frames)
+    kVisLarynx,                // the larynx's frame (height -1.5..1.5 cm)
+    kVisSound,                 // the sound fan's brightness: 0 silent .. 5 loudest
     kNumParams
 };
 
 constexpr int kEngineParams = kKey + 1;   // the engine reads 0..kKey (engine/src/lib.rs, module p)
 
-bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit; }
+bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit || (i >= kVisJaw && i <= kVisSound); }
 
 // The momentary controls: a tap sets one and the MPC puts it back to 0 when the finger lifts, which
 // with a quick tap can happen before the next block reads it. Their taps are caught as the host
 // sets them (parameterChanged) and handed to the engine (cm_tap).
 bool isTap(int i) { return i == kKey || i == kPad || i == kConsonant || i == kSpeak; }
 
-constexpr int kFaceFrames = 33;    // engine/src/lib.rs face_postures()
-constexpr int kVelumFrames = 8;    // engine/src/lib.rs VELUM_FRAMES
+constexpr int kVelumFrames = 8;    // engine/src/face.rs VELUM_FRAMES
+constexpr int kFaceLayers = 6;     // cm_face: jaw, tongue, upper lip, lower lip, larynx, sound (kVisJaw.. in that order)
+constexpr int kMaxFaceReports = 3; // the face's layers report at most this many frames a look
 constexpr int kLookMs = 50;        // the helper thread looks this often
 constexpr int kKnobLooks = 6;      // and stays quiet this many looks after a setting moves
 constexpr int kHitLooks = 3;       // a hit's pad stays lit this many looks (about 150 ms)
@@ -213,14 +221,14 @@ public:
         for (const std::string& s : kSounds) padChoices.push_back(s);
         addParam(mpc::choiceParam("pad",         "Pad",         padChoices, 0));
 
-        mpc::Param face = mpc::intParam("vis_face", "Face", 0, kFaceFrames - 1, 0);
+        mpc::Param face = mpc::intParam("vis_face", "Face", 0, 32, 0);   // unused since the layered face
         mpc::Param velum = mpc::intParam("vis_velum", "Velum Pos", 0, kVelumFrames - 1, 0);
         face.automatable = false;
         velum.automatable = false;
         addParam(face);
         addParam(velum);
 
-        addParam(mpc::choiceParam("type_into", "Type Into", {"Speech", "Lyrics"}, 0));
+        addParam(mpc::choiceParam("type_into", "Type Into", {"Speak", "Sing"}, 0));   // named as the modes
         addParam(mpc::choiceParam("type_slot", "Type Slot", {"1", "2", "3", "4", "5", "6", "7", "8"}, 0));
         std::vector<std::string> keys = {"-"};
         for (char c = 'A'; c <= 'Z'; ++c) keys.push_back(std::string(1, c));
@@ -235,6 +243,19 @@ public:
         mpc::Param hit = mpc::choiceParam("hit", "Hit", {"-", "Kick", "Hat", "Snare", "Rim", "Inward", "Click", "Pop", "Open Hat", "Crash", "Hum"}, 0);
         hit.automatable = false;
         addParam(hit);
+        // the face's layers, read-only; at rest until the first report
+        int rest[kFaceLayers] = {};
+        cm_face_frames(faceFrames_);
+        cm_face_rest(rest);
+        const char* layerIds[kFaceLayers] = {"vis_jaw", "vis_tongue", "vis_lips", "vis_lower_lip", "vis_larynx", "vis_sound"};
+        const char* layerNames[kFaceLayers] = {"Jaw Pos", "Tongue Pos", "Lips Pos", "Lower Lip", "Larynx Pos", "Sound Lvl"};
+        for (int i = 0; i < kFaceLayers; ++i)
+        {
+            if (faceFrames_[i] < 2) faceFrames_[i] = 2;
+            mpc::Param v = mpc::intParam(layerIds[i], layerNames[i], 0, faceFrames_[i] - 1, std::min(std::max(rest[i], 0), faceFrames_[i] - 1));
+            v.automatable = false;
+            addParam(v);
+        }
         texts_ = cm_texts_new();
 
         // Built-in programs: voices only. Each sets parameters 0-13 (Gain, the voice source, the
@@ -415,8 +436,10 @@ public:
         }
         int shown[4] = {0, 0, 0, 0};
         cm_display(e, shown);
-        faceFrame_.store(shown[0], std::memory_order_relaxed);
         velumFrame_.store(shown[1], std::memory_order_relaxed);
+        int layers[kFaceLayers] = {};
+        cm_face(e, layers);
+        for (int i = 0; i < kFaceLayers; ++i) faceNow_[i].store(layers[i], std::memory_order_relaxed);
         hitPad_.store(shown[2], std::memory_order_relaxed);
         hitCount_.store(shown[3], std::memory_order_release);
         processed_.fetch_add(1, std::memory_order_relaxed);
@@ -469,8 +492,11 @@ private:
     {
         float seen[kNumParams];
         for (int i = 0; i < kNumParams; ++i) seen[i] = get(i);
-        int lastFace = -1, lastVelum = -1, lastTyped = -1, knobLooks = 0, idleLooks = 0;
-        int faceAgain = 0, velumAgain = 0;
+        int lastTyped = -1, knobLooks = 0, idleLooks = 0;
+        // the face's strips: the soft palate, then cm_face's layers
+        constexpr int kStrips = 1 + kFaceLayers;
+        int lastShown[kStrips], again[kStrips] = {};
+        for (int& l : lastShown) l = -1;
         int lastHitCount = hitCount_.load(std::memory_order_acquire), shownHit = -1, hitLooks = 0;
         uint32_t lastProcessed = 0;
         for (;;)
@@ -501,27 +527,42 @@ private:
             if (moved) knobLooks = kKnobLooks;
             else if (knobLooks > 0) --knobLooks;
 
-            auto show = [&](int index, int frame, int frames, int& last, int& again)
+            // The face's strips: held back while a setting moves, and shown once it rests ("last" is
+            // what the screen has, so a frame that changed during a knob sweep is still sent: in Play
+            // the mouth moves only with the knobs). A new frame is reported again every half second
+            // for a few seconds: in Play it is often the only report for a long time, and one the
+            // screen misses (the Q-Link window over the face, say) would leave that layer stuck. At
+            // most kMaxFaceReports reports a look, new frames first; one left over waits for the next.
+            if (knobLooks == 0)
             {
-                // held back while a setting moves, and shown once it rests: "last" is what the
-                // screen has, so a frame that changed during a knob sweep is still sent (in Play
-                // the mouth moves only with the knobs)
-                if (knobLooks > 0) return;
-                if (frame != last)
+                int budget = kMaxFaceReports;
+                auto frameOf = [&](int s, int& index, int& frames)
                 {
-                    last = frame;
-                    again = kResendLooks;
+                    if (s == 0) { index = kVisVelum; frames = kVelumFrames; return velumFrame_.load(std::memory_order_relaxed); }
+                    index = kVisJaw + s - 1;
+                    frames = faceFrames_[s - 1];
+                    return faceNow_[s - 1].load(std::memory_order_relaxed);
+                };
+                for (int k = 0; k < kStrips && budget > 0; ++k)
+                {
+                    const int s = (stripTurn_ + k) % kStrips;
+                    int index = 0, frames = 2;
+                    const int frame = std::min(std::max(frameOf(s, index, frames), 0), frames - 1);
+                    if (frame == lastShown[s]) continue;
+                    --budget;
+                    lastShown[s] = frame;
+                    again[s] = kResendLooks;
                     setNormalised(index, (float)frame / (float)(frames - 1));
                     notifyHostParameterChanged(index);
-                    return;
                 }
-                // a new frame is reported again every half second for a few seconds: in Play it
-                // is often the only report for a long time, and one the screen misses (the Q-Link
-                // window over the face, say) would leave the face stuck where it was
-                if (again > 0 && --again % kResendEvery == 0) notifyHostParameterChanged(index);
-            };
-            show(kVisFace, faceFrame_.load(std::memory_order_relaxed), kFaceFrames, lastFace, faceAgain);
-            show(kVisVelum, velumFrame_.load(std::memory_order_relaxed), kVelumFrames, lastVelum, velumAgain);
+                for (int s = 0; s < kStrips; ++s)
+                {
+                    if (again[s] <= 0 || --again[s] % kResendEvery != 0 || budget <= 0) continue;
+                    --budget;
+                    notifyHostParameterChanged(s == 0 ? kVisVelum : kVisJaw + s - 1);
+                }
+                stripTurn_ = (stripTurn_ + 1) % kStrips;
+            }
             // the typed text: its value moves so the host reads the new text (a report alone does
             // not refresh a text whose value stayed the same); reported even while knobs move, as
             // typing is taps
@@ -675,7 +716,10 @@ private:
     std::atomic<uint32_t> tapWrite_{0};
     uint32_t tapRead_ = 0;   // the audio thread's
     std::atomic<int> tapLast_[4] = {};
-    std::atomic<int> faceFrame_{0}, velumFrame_{0}, hitPad_{0}, hitCount_{0};
+    std::atomic<int> velumFrame_{0}, hitPad_{0}, hitCount_{0};
+    std::atomic<int> faceNow_[kFaceLayers] = {};
+    int faceFrames_[kFaceLayers] = {10, 28, 18, 12, 7, 6};   // cm_face_frames
+    int stripTurn_ = 0;                                 // the helper thread's
     const void* texts_ = nullptr;
     std::atomic<char> previewBuf_[64] = {};
     std::atomic<uint32_t> previewSeq_{0}, previewWrites_{0};
