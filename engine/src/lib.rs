@@ -370,7 +370,7 @@ pub struct ChimeraMpc {
     pending_keys: [u8; 32],
     n_pending: usize,
     /// what the typed slot ends with, for the screen, and a serial that moves when it changes
-    preview: [u8; 64],
+    preview: [u8; texts::PREVIEW_BYTES],
     preview_len: usize,
     preview_serial: u32,
     preview_dirty: bool,
@@ -440,7 +440,7 @@ impl ChimeraMpc {
             texts,
             pending_keys: [0; 32],
             n_pending: 0,
-            preview: [0; 64],
+            preview: [0; texts::PREVIEW_BYTES],
             preview_len: 0,
             preview_serial: 0,
             preview_dirty: true,

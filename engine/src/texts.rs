@@ -20,10 +20,14 @@ const PUNCT: [u8; 6] = [b' ', b'.', b',', b'?', b'!', b'\''];
 pub const KEY_DEL: usize = 33;
 pub const KEY_LINE: usize = 34;
 pub const KEY_CLEAR: usize = 35;
-/// Characters of a slot the preview shows.
-pub const PREVIEW_CHARS: usize = 28;
-/// Characters after the cursor the preview keeps in view (when the text runs on past it).
-const PREVIEW_AFTER: usize = 8;
+/// The preview: two rows of up to ROW_CHARS characters (and the cursor), broken at spaces. A row
+/// is one parameter's display text, which the SDK framework keeps to 31 bytes.
+pub const ROW_CHARS: usize = 29;
+const ROW_BYTES: usize = 31;
+/// The preview buffer: two rows and the break between them.
+pub const PREVIEW_BYTES: usize = 2 * ROW_BYTES + 2;
+/// The cursor: a thin bar, about as wide as a space.
+const CURSOR: char = '|';
 
 #[derive(Clone, Copy)]
 pub struct Slot {
@@ -133,35 +137,63 @@ impl TextBank {
         self.generation[t] += 1;
     }
 
-    /// The slot around its cursor (`from_end` characters before the end) as one line ("/"
-    /// between its lines) with "_" at the cursor, into `out`; returns its length. Up to
-    /// PREVIEW_CHARS characters: a few after the cursor, the rest before it. Allocation-free.
-    pub fn preview(&self, target: usize, slot: usize, from_end: usize, out: &mut [u8; 64]) -> usize {
+    /// The slot around its cursor (`from_end` characters before the end) as two rows into `out`:
+    /// the text wrapped at spaces into rows of up to ROW_CHARS characters (a line break shown as
+    /// "/"), the row with the cursor and the one before it, a "\n" between them, and the cursor
+    /// as a thin bar. Returns the length. Allocation-free (fixed arrays on the stack).
+    pub fn preview(&self, target: usize, slot: usize, from_end: usize, out: &mut [u8; PREVIEW_BYTES]) -> usize {
         let text = self.slots[target.min(1)][slot.min(SLOTS - 1)].as_str();
-        let total = text.chars().count();
-        let at = total - from_end.min(total);
-        let after_total = total - at;
-        let before = at.min(PREVIEW_CHARS - after_total.min(PREVIEW_AFTER));
-        let after = after_total.min(PREVIEW_CHARS - before);
-        let mut len = 0;
-        let mut put = |ch: char, out: &mut [u8; 64]| {
+        let mut chars = ['\0'; TEXT_CAP];
+        let mut n = 0;
+        for ch in text.chars().take(TEXT_CAP) {
+            chars[n] = if ch == '\n' { '/' } else { ch };
+            n += 1;
+        }
+        let at = n - from_end.min(n);
+        // the rows: each starts where the last ended, breaks after its last space that fits
+        let mut starts = [0usize; TEXT_CAP + 2];
+        let mut rows = 1;
+        let mut s = 0;
+        while n - s > ROW_CHARS {
+            let mut end = s + ROW_CHARS;
+            if let Some(sp) = (s + 1..=end).rev().find(|&i| chars[i - 1] == ' ') {
+                end = sp;
+            }
+            starts[rows] = end;
+            rows += 1;
+            s = end;
+        }
+        starts[rows] = n;
+        // the cursor's row (at the very end: the last row), and the one before it
+        let k = if at >= n { rows - 1 } else { (0..rows).rev().find(|&r| starts[r] <= at).unwrap_or(0) };
+        let first = k.saturating_sub(1);
+        // one character into the row (dropped if the row or the buffer is full)
+        fn put(ch: char, out: &mut [u8; PREVIEW_BYTES], len: &mut usize, row_len: &mut usize) {
             let mut b = [0u8; 4];
             let e = ch.encode_utf8(&mut b);
-            if len + e.len() < out.len() {
-                out[len..len + e.len()].copy_from_slice(e.as_bytes());
-                len += e.len();
-            }
-        };
-        for (i, ch) in text.chars().enumerate() {
-            if i == at {
-                put('_', out);
-            }
-            if i + before >= at && i < at + after {
-                put(if ch == '\n' { '/' } else { ch }, out);
+            if *row_len + e.len() <= ROW_BYTES && *len + e.len() < out.len() {
+                out[*len..*len + e.len()].copy_from_slice(e.as_bytes());
+                *len += e.len();
+                *row_len += e.len();
             }
         }
-        if at == total {
-            put('_', out);
+        let mut len = 0;
+        let mut row_len = 0;
+        for r in first..=(first + 1).min(rows - 1) {
+            if r > first {
+                out[len] = b'\n';
+                len += 1;
+                row_len = 0;
+            }
+            for i in starts[r]..starts[r + 1] {
+                if i == at {
+                    put(CURSOR, out, &mut len, &mut row_len);
+                }
+                put(chars[i], out, &mut len, &mut row_len);
+            }
+            if at == n && r == rows - 1 {
+                put(CURSOR, out, &mut len, &mut row_len);
+            }
         }
         len
     }

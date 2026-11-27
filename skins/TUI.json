@@ -4854,14 +4854,14 @@
                                     "showWhenDataModelInvalid": "Show",
                                     "whenVisible": "WhenFocussed",
                                     "boundsType": "Absolute",
-                                    "bounds": "0 0 676 70"
+                                    "bounds": "0 0 676 104"
                                 }
                             },
                             {
                                 "version": 2,
                                 "componentData": {
                                     "version": 1,
-                                    "name": "text",
+                                    "name": "row 1",
                                     "type": "Label",
                                     "data": {
                                         "version": 1,
@@ -4871,7 +4871,7 @@
                                                 "version": 1,
                                                 "name": "Roboto",
                                                 "style": "Light",
-                                                "height": 40.0
+                                                "height": 42.0
                                             },
                                             "colour": "ffeffbff",
                                             "justification": "left verticallyCentred",
@@ -4891,7 +4891,44 @@
                                     "showWhenDataModelInvalid": "Show",
                                     "whenVisible": "Always",
                                     "boundsType": "Absolute",
-                                    "bounds": "10 6 656 58"
+                                    "bounds": "12 2 652 50"
+                                }
+                            },
+                            {
+                                "version": 2,
+                                "componentData": {
+                                    "version": 1,
+                                    "name": "row 2",
+                                    "type": "Label",
+                                    "data": {
+                                        "version": 1,
+                                        "textStyle": {
+                                            "version": 1,
+                                            "font": {
+                                                "version": 1,
+                                                "name": "Roboto",
+                                                "style": "Light",
+                                                "height": 42.0
+                                            },
+                                            "colour": "ffeffbff",
+                                            "justification": "left verticallyCentred",
+                                            "case": "Original"
+                                        },
+                                        "type": "Value",
+                                        "handleName": "Text2"
+                                    }
+                                },
+                                "handle remapping": {
+                                    "version": 1,
+                                    "map": []
+                                },
+                                "bounds": {
+                                    "version": 1,
+                                    "acceptsHWFocus": "No",
+                                    "showWhenDataModelInvalid": "Show",
+                                    "whenVisible": "Always",
+                                    "boundsType": "Absolute",
+                                    "bounds": "12 52 652 50"
                                 }
                             }
                         ]
@@ -30366,6 +30403,10 @@
                                     {
                                         "key": "Text",
                                         "value": "Parameter 73"
+                                    },
+                                    {
+                                        "key": "Text2",
+                                        "value": "Parameter 83"
                                     }
                                 ]
                             },
@@ -30375,20 +30416,20 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "580 80 676 70"
+                                "bounds": "580 80 676 104"
                             }
                         },
                         {
                             "version": 2,
                             "componentData": {
                                 "version": 1,
-                                "name": "cap TAP THE TEXT, THEN THE DATA WHEEL MOVES THE CURSOR.  LINE STARTS A NEW LINE (/)",
+                                "name": "cap TAP, THEN THE DATA WHEEL: CURSOR",
                                 "type": "Image",
                                 "data": {
                                     "version": 2,
                                     "imageType": "Regular",
                                     "colour": "0",
-                                    "image": "t_cap_385f75.png"
+                                    "image": "t_cap_3db9ea.png"
                                 }
                             },
                             "handle remapping": {
@@ -30401,7 +30442,7 @@
                                 "showWhenDataModelInvalid": "Show",
                                 "whenVisible": "Always",
                                 "boundsType": "Absolute",
-                                "bounds": "584 155 522 24"
+                                "bounds": "1038 56 225 23"
                             }
                         },
                         {

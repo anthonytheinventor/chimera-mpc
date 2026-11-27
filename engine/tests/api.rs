@@ -391,14 +391,14 @@ fn typed_words_are_shown_and_spoken() {
     cm_text_preview(r.h, buf.as_mut_ptr(), 64);
     let shown = std::ffi::CStr::from_bytes_until_nul(&buf).unwrap().to_str().unwrap().to_string();
     println!("typed: {shown:?}");
-    assert_eq!(shown, "hi there/bye_");
+    assert_eq!(shown, "hi there/bye|");
     // Del takes the last letter away
     r.set(p::KEY, 33.0);
     r.render(0.01);
     r.set(p::KEY, 0.0);
     r.render(0.01);
     cm_text_preview(r.h, buf.as_mut_ptr(), 64);
-    assert_eq!(std::ffi::CStr::from_bytes_until_nul(&buf).unwrap().to_str().unwrap(), "hi there/by_");
+    assert_eq!(std::ffi::CStr::from_bytes_until_nul(&buf).unwrap().to_str().unwrap(), "hi there/by|");
     // after the pause the slot is planned again: speak it (slot 4, from its first line)
     r.render(0.8);
     std::thread::sleep(std::time::Duration::from_millis(600));
@@ -589,7 +589,7 @@ fn a_tap_types_even_when_the_key_never_reaches_a_block() {
     assert_ne!(before, after, "the tap did not type");
     let n = buf.iter().position(|&b| b == 0).unwrap_or(64);
     let text = std::str::from_utf8(&buf[..n]).unwrap();
-    assert!(text.ends_with("h_"), "typed text: {text}");
+    assert!(text.ends_with("h|"), "typed text: {text}");
 }
 
 /// The face's frames now, as the plugin reads them once a block: jaw, tongue, upper lip, lower lip,
@@ -1010,19 +1010,43 @@ fn the_cursor_moves_where_keys_type_and_delete() {
     for c in "helo".chars() {
         cm_tap(r.h, p::KEY as i32, key_of(c) as i32);
     }
-    assert_eq!(preview(&mut r), "helo_");
+    assert_eq!(preview(&mut r), "helo|");
     // one character back: between "hel" and "o"; type "l"
     cm_text_cursor(r.h, 1);
-    assert_eq!(preview(&mut r), "hel_o");
+    assert_eq!(preview(&mut r), "hel|o");
     cm_tap(r.h, p::KEY as i32, key_of('l') as i32);
-    assert_eq!(preview(&mut r), "hell_o", "typed at the cursor");
+    assert_eq!(preview(&mut r), "hell|o", "typed at the cursor");
     // Del takes the character before the cursor
     cm_tap(r.h, p::KEY as i32, 33);
     cm_tap(r.h, p::KEY as i32, 33);
-    assert_eq!(preview(&mut r), "he_o", "deleted before the cursor");
+    assert_eq!(preview(&mut r), "he|o", "deleted before the cursor");
     // past the start: at the start
     cm_text_cursor(r.h, 50);
-    assert_eq!(preview(&mut r), "_heo");
+    assert_eq!(preview(&mut r), "|heo");
     cm_text_cursor(r.h, 0);
-    assert_eq!(preview(&mut r), "heo_");
+    assert_eq!(preview(&mut r), "heo|");
+}
+
+#[test]
+fn the_preview_wraps_into_two_rows_around_the_cursor() {
+    let bank = texts::new_bank();
+    let mut b = bank.lock().unwrap();
+    let text = "the quick brown fox jumps over the lazy dog and keeps on running far away";
+    b.slots[0][0].set(text);
+    let mut out = [0u8; texts::PREVIEW_BYTES];
+    let show = |b: &texts::TextBank, from_end: usize, out: &mut [u8; texts::PREVIEW_BYTES]| {
+        let n = b.preview(0, 0, from_end, out);
+        std::str::from_utf8(&out[..n]).unwrap().to_string()
+    };
+    // at the end: the last row and the one before it, broken at spaces, each within 30 characters
+    let end = show(&b, 0, &mut out);
+    let rows: Vec<&str> = end.split('\n').collect();
+    assert_eq!(rows.len(), 2, "{end:?}");
+    assert!(rows.iter().all(|r| r.len() <= 31), "{rows:?}");
+    assert!(rows[1].ends_with("away|"), "{rows:?}");
+    // near the start: the first two rows, the cursor in the first
+    let start = show(&b, text.len() - 4, &mut out);
+    assert!(start.starts_with("the |quick"), "{start:?}");
+    // every word of the text is whole in some row (breaks only at spaces)
+    assert!(!end.contains("unn\n") && !start.contains("ow\nn"), "{end:?} {start:?}");
 }

@@ -37,6 +37,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
@@ -119,12 +120,13 @@ enum ParamIndex
     kVisSound,                 // the sound fan's brightness: 0 silent .. 5 loudest
     kStepLit,                  // read-only: the BEATBOX square to light (0 none, 1..16: a pad hit, or the beat's step)
     kCursor,                   // WORDS: the typing cursor (the data wheel on the text box), kCursorEnd = at the end
+    kTyped2,                   // read-only: the text box's second row (Typed is the first; formatValue)
     kNumParams
 };
 
 constexpr int kEngineParams = kKey + 1;   // the engine reads 0..kKey (engine/src/lib.rs, module p)
 
-bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit || (i >= kVisJaw && i <= kVisSound) || i == kStepLit; }
+bool isDisplay(int i) { return i == kVisFace || i == kVisVelum || i == kTyped || i == kHit || (i >= kVisJaw && i <= kVisSound) || i == kStepLit || i == kTyped2; }
 
 // The momentary controls: a tap sets one and the MPC puts it back to 0 when the finger lifts, which
 // with a quick tap can happen before the next block reads it. Their taps are caught as the host
@@ -267,6 +269,9 @@ public:
         std::vector<std::string> cursorSteps;
         for (int i = 0; i <= kCursorEnd; ++i) cursorSteps.push_back(i == kCursorEnd ? "End" : "-" + std::to_string(kCursorEnd - i));
         addParam(mpc::choiceParam("cursor", "Cursor", cursorSteps, kCursorEnd));
+        mpc::Param typed2 = mpc::intParam("typed2", "Typed 2", 0, 1023, 0);
+        typed2.automatable = false;
+        addParam(typed2);
         texts_ = cm_texts_new();
 
         // Built-in programs: voices only. Each sets parameters 0-13 (Gain, the voice source, the
@@ -320,14 +325,18 @@ public:
         tapQueue_[w % kTapQueue].compare_exchange_strong(empty, (int32_t)((index << 8) | step), std::memory_order_release);
     }
 
-    // The typed slot's end, as the Typed parameter's text (the host's thread).
+    // The text box's two rows (the slot around its cursor), as Typed's and Typed 2's text (the host's thread).
     bool formatValue(int index, float plainValue, std::string& out) override
     {
         (void)plainValue;
-        if (index != kTyped) return false;
+        if (index != kTyped && index != kTyped2) return false;
+        // the preview is two rows with a line break between them: Typed shows the first, Typed 2
+        // the second (each within the framework's 31 characters)
         char buf[64];
         readPreview(buf, sizeof buf);
-        out = buf;
+        const char* nl = std::strchr(buf, '\n');
+        if (index == kTyped) out.assign(buf, nl ? (size_t)(nl - buf) : std::strlen(buf));
+        else out = nl ? nl + 1 : "";
         return true;
     }
 
@@ -607,6 +616,8 @@ private:
                 lastTyped = typed;
                 setNormalised(kTyped, (float)typed / 1023.0f);
                 notifyHostParameterChanged(kTyped);
+                setNormalised(kTyped2, (float)typed / 1023.0f);
+                notifyHostParameterChanged(kTyped2);
             }
             // a drum hit lights its pad for a moment
             const int hits = hitCount_.load(std::memory_order_acquire);

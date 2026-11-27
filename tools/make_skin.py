@@ -195,7 +195,7 @@ KEY_W, KEY_H, KEY_PITCH_X, KEY_PITCH_Y, KEYS_X, KEYS_Y = 118, 100, 126, 108, 14,
 WIDE_KEYS = [("CLEAR", 35, 14, 180, RED), ("!", 31, 202, 118, None), ("SPACE", 27, 328, 562, LABEL),
              ("LINE /", 34, 898, 180, GREEN), ("DEL", 33, 1086, 180, WHITE)]
 # previews only: what the live text labels show when their parameter's default text is empty
-PREVIEW_SAMPLE = {"Typed": "hello. can you hear me?"}
+PREVIEW_SAMPLE = {"Typed": "hello. can you hear me? i can", "Typed 2": "hear you just fine, thanks|"}
 
 
 # --------------------------------------------------------------------------------------------
@@ -1259,19 +1259,22 @@ def words_block(b, ch):
     b.cap(ch, tx + 140, TOP + 9, "OF 8", 12, QUIET, "l", 0.1)
     # the text box: tapped, it takes the focus and the data wheel moves the typing cursor (Cursor);
     # its label shows the typed text (Typed), the cursor as "_"
-    typed, cursor = b.ref(params["Typed"]), b.ref(params["Cursor"])
-    bw, bh = 676, 70
+    # two rows (Typed, Typed 2): each a parameter's text, which the framework keeps to 31 characters
+    typed, typed2, cursor = b.ref(params["Typed"]), b.ref(params["Typed 2"]), b.ref(params["Cursor"])
+    bw, bh = 676, 104
 
     def box_def():
-        lab = label_data("Value", argb(INK), 40.0, "left verticallyCentred")
-        lab = G.Obj([(k, "Text" if k == "handleName" else v) for k, v in lab])
+        def row(handle):
+            lab = label_data("Value", argb(INK), 42.0, "left verticallyCentred")
+            return G.Obj([(k, handle if k == "handleName" else v) for k, v in lab])
         return G.component_definition([G.action("Mouse Down", "Q-Link", "Data", "")], [
             focus_entry(BLUE, bw, bh),
-            G.entry("text", "Label", lab, rect_str(10, 6, bw - 20, bh - 12), "No", "Show", "Always")], "00000000")
+            G.entry("row 1", "Label", row("Text"), rect_str(12, 2, bw - 24, 50), "No", "Show", "Always"),
+            G.entry("row 2", "Label", row("Text2"), rect_str(12, 52, bw - 24, 50), "No", "Show", "Always")], "00000000")
     dn = b.need("chimTextBox", box_def)
     ch.append(G.entry("text box", dn, G.obj(("version", 1), ("handleName", "Data")), rect_str(580, TOP + 28, bw, bh),
-                      "Yes", "Show", "Always", remap=[("Data", cursor.handle), ("Text", typed.handle)]))
-    b.cap(ch, 590, TOP + 108, "TAP THE TEXT, THEN THE DATA WHEEL MOVES THE CURSOR.  LINE STARTS A NEW LINE (/)", 12, QUIET, "l", 0.1)
+                      "Yes", "Show", "Always", remap=[("Data", cursor.handle), ("Text", typed.handle), ("Text2", typed2.handle)]))
+    b.cap(ch, 1256, TOP + 9, "TAP, THEN THE DATA WHEEL: CURSOR", 12, QUIET, "r", 0.1)
     # the keys: one shared cap pair for the letters, the letters baked under the buttons
     kp = params["Key"]
     n = len(kp.choices)
