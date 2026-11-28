@@ -339,7 +339,9 @@ CHIMERA's engine is unchanged in what it models. What changed:
   in four steps and the tongue kept out of the palate between shape updates (the click before a hit drops
   from 9 dB to 28 dB under the hit), the breath noise at its designed level at any sample rate (no extra
   hiss), a cut of 10 dB at 10.3 kHz where the airway whistles, and a zero at the top of the spectrum.
-  Together they cost under 1 % more work.
+  Together they cost under 1 % more work;
+- **profile-guided optimization**: the compiler lays the 32-bit engine out from a recording of which
+  code paths run while it plays every mode, with the same samples coming out.
 
 Measured on an MPC One+, speaking, as a share of a 128-frame block:
 
@@ -349,7 +351,8 @@ Measured on an MPC One+, speaking, as a share of a 128-frame block:
 | Without oversampling | 126 to 145 % |
 | Exact speedups and MPC settings | about 31 % |
 | Single-precision NEON airway | about 20 % |
-| **Now** | **about 19 %** (99th percentile about 27 %, idle 0.5 %) |
+| Before profile-guided optimization | 19 to 20 % (99th percentile 26 to 28 %) |
+| **Now** | **18.5 to 19.3 %** (99th percentile 25 to 27 %, idle 0.6 %) |
 
 <details>
 <summary><b>Build from source</b></summary>
@@ -381,6 +384,19 @@ rustup +nightly target add armv7-unknown-linux-gnueabihf
 
 The 32-bit build uses nightly Rust because its vector code (NEON intrinsics) is not in stable Rust yet
 on 32-bit ARM.
+
+The 32-bit engine is also built with profile-guided optimization, from the profile in `engine/pgo/`.
+It changes how the code is laid out, not what it computes: the samples are the same as without it,
+and the voice takes about 0.7 points less CPU on an MPC One+. After changing the engine or CHIMERA's
+code, the build says the profile is out of date; record it again with:
+
+```
+python "plugins/CHIMERA MPC/tools/pgo_profile.py"
+```
+
+That builds an instrumented 32-bit engine and runs `tools/pgo/train.c` (every mode) under qemu in WSL.
+It needs `rustup +nightly component add llvm-tools` and, in WSL, `gcc-arm-linux-gnueabihf` and
+`qemu-user`. `CHIMERA_PGO=0` builds without the profile.
 
 - `tools/make_skin.py` draws the screen (`skins/`, with previews in `build/preview/`).
 - `tools/make_readme_images.py` redraws the pictures in this README with the skin's own drawing code
