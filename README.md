@@ -334,7 +334,12 @@ CHIMERA's engine is unchanged in what it models. What changed:
 - **the airway in single precision** on the MPC's vector unit (NEON), with its ports and joints kept in
   compact structures;
 - **a notch at a quarter of the sample rate**, which removes the chirp that updating the geometry every
-  few samples leaves on consonants.
+  few samples leaves on consonants;
+- **cleanup for the shortcuts**, measured against the 4x reference on the beatbox sounds: closures eased
+  in four steps and the tongue kept out of the palate between shape updates (the click before a hit drops
+  from 9 dB to 28 dB under the hit), the breath noise at its designed level at any sample rate (no extra
+  hiss), a cut of 10 dB at 10.3 kHz where the airway whistles, and a zero at the top of the spectrum.
+  Together they cost under 1 % more work.
 
 Measured on an MPC One+, speaking, as a share of a 128-frame block:
 
