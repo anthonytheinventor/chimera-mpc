@@ -221,6 +221,16 @@ pub(crate) fn mpc_voice(fs: f64, body: BodyMix) -> Box<HumanVoice> {
     // notch there takes it out (as clean as geometry every sample, about 0.5 % more CPU)
     if os == 1 {
         v.set_output_filters(fs / 4.0, 1500.0, 0.0, 0);
+        // the rest of what 1x and the every-4-samples shortcuts leave (beat-lab, "fix C"; about
+        // 0.8 % more work per frame): a closure's slew limits taken in 4 steps and the tongue kept
+        // out of the palate between anatomy passes (the click before a hit, late releases), the turbulence
+        // noise at its 96 kHz design level (the network's noise grows as 1/fs^2: bright hiss),
+        // a zero at Nyquist (the line at fs/2) and 10 dB off the airway's whistles near 10 kHz
+        v.set_slew_substeps(4);
+        v.contact_predict = true;
+        v.airway.net.noise_scale *= v.fs / 96000.0;
+        v.add_output_nyquist_zero(0.8);
+        v.add_output_peak(10300.0, 2.0, -10.0);
     }
     v.set_source(&SourcePatch::f0(default_f0(body)));
     // a voice's first control step sizes some of its buffers: do it here, not on the audio thread
