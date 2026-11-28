@@ -205,6 +205,38 @@ const HUM_TAG: f64 = -1.0;
 const HUM_LEN: f64 = 3600.0;
 const BEAT_HIT_LEN: f64 = 0.18;
 
+/// The output tone of a voice at 1x, by mode (nothing when oversampled). Geometry every 4 samples
+/// steps the airway's coefficients at fs/4, which the jet's flow turns into a tone there (a
+/// "chirp") at consonant onsets, releases and closures: both tones keep a notch on it.
+/// - Sing, Play and Speak (beat-lab air study, fitted to CHIMERA's desktop plugin, 2x): the 1x
+///   airway loses the top octave and puts a bump near 5.3 kHz; a +12 dB high shelf from 11.5 kHz, a
+///   cut on the bump, a narrow cut beside the notch (it and the shelf leave the chirp out), a zero at
+///   Nyquist, and the turbulence noise as the network makes it. The voice's 4-16 kHz spectrum comes
+///   within 2 dB of the desktop's on average (7.9 dB with the beatbox tone).
+/// - Beatbox ("fix C"): the shelf would lift the click before each hit, so the hits keep the darker
+///   tone: 10 dB off the airway's whistles near 10 kHz, the Nyquist zero, and the noise at its 96 kHz
+///   design level (the network's noise grows as 1/fs^2 at a lower rate: bright hiss).
+/// The frequencies were fitted at 44.1 kHz and move with the rate (the 1x airway's do).
+pub(crate) fn set_tone(v: &mut HumanVoice, fs: f64, beatbox: bool) {
+    if (v.fs - fs).abs() > 1.0 {
+        return;
+    }
+    let k = fs / 44100.0;
+    if beatbox {
+        v.airway.net.noise_scale = fs / 96000.0;
+        v.set_output_filters(fs / 4.0, 1500.0, 0.0, 0);
+        v.add_output_nyquist_zero(0.8);
+        v.add_output_peak(10300.0 * k, 2.0, -10.0);
+    } else {
+        v.airway.net.noise_scale = 1.0;
+        v.set_output_filters(fs / 4.0, 1431.0 * k, 0.0, 0);
+        v.add_output_nyquist_zero(0.8);
+        v.add_output_peak(5259.0 * k, 4.08, -11.7);
+        v.add_output_peak(11411.0 * k, 4.0, -21.6);
+        v.add_output_shelf(11459.0 * k, 1.0, 12.0);
+    }
+}
+
 /// A voice with the MPC settings: 1x at 44.1 and 48 kHz, lean trachea and nose sections,
 /// the geometry every 4 control steps and every 4 samples, no second geometry pass after a
 /// contact correction, the cheaper arithmetic and the single-precision (NEON) airway.
@@ -216,22 +248,14 @@ pub(crate) fn mpc_voice(fs: f64, body: BodyMix) -> Box<HumanVoice> {
     v.set_contact_reapply(false);
     v.airway.net.approx = APPROX_WALLS | APPROX_KINETIC;
     v.set_fast_airway(true);
-    // geometry every 4 samples at 1x steps the airway's coefficients at fs/4, which the jet's flow
-    // turns into an 11 kHz tone at consonant onsets, releases and closures (a "chirp"): a narrow
-    // notch there takes it out (as clean as geometry every sample, about 0.5 % more CPU)
     if os == 1 {
-        v.set_output_filters(fs / 4.0, 1500.0, 0.0, 0);
-        // the rest of what 1x and the every-4-samples shortcuts leave (beat-lab, "fix C"; about
-        // 0.8 % more work per frame): a closure's slew limits taken in 4 steps and the tongue kept
-        // out of the palate between anatomy passes (the click before a hit, late releases), the turbulence
-        // noise at its 96 kHz design level (the network's noise grows as 1/fs^2: bright hiss),
-        // a zero at Nyquist (the line at fs/2) and 10 dB off the airway's whistles near 10 kHz
+        // what the anatomy every 4 control steps leaves (beat-lab "fix C"): a closure's slew limits
+        // taken in 4 steps and the tongue kept out of the palate between anatomy passes (the click
+        // before a hit, late releases)
         v.set_slew_substeps(4);
         v.contact_predict = true;
-        v.airway.net.noise_scale *= v.fs / 96000.0;
-        v.add_output_nyquist_zero(0.8);
-        v.add_output_peak(10300.0, 2.0, -10.0);
     }
+    set_tone(&mut v, fs, false);
     v.set_source(&SourcePatch::f0(default_f0(body)));
     // a voice's first control step sizes some of its buffers: do it here, not on the audio thread
     v.render(&mut [0.0; 128]);
@@ -572,6 +596,8 @@ impl ChimeraMpc {
         // the outgoing voice gets its own level back (Gain is on the playing one only)
         self.engine.voice_mut().output_gain = self.base_gain;
         self.engine.install_voice(&mut voice, mix);
+        // the mode's tone (a voice is built with Sing's)
+        set_tone(self.engine.voice_mut(), self.fs, self.mode == MODE_BEATBOX);
         self.base_gain = self.engine.voice().output_gain;
         self.engine.voice_mut().output_gain = self.base_gain * self.gain_now;
         // what is sounding carries on in the new voice (a Blend arrives whenever the worker has
@@ -925,6 +951,10 @@ impl ChimeraMpc {
             if m != self.mode {
                 // a mode change ends whatever was sounding
                 self.stop_notes();
+                // Beatbox has its own tone (set_tone): switched on the way in and out
+                if (m == MODE_BEATBOX) != (self.mode == MODE_BEATBOX) {
+                    set_tone(self.engine.voice_mut(), self.fs, m == MODE_BEATBOX);
+                }
                 self.mode = m;
                 self.key_bend = 1.0;
                 self.update_bend();

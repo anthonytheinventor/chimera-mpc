@@ -335,11 +335,14 @@ CHIMERA's engine is unchanged in what it models. What changed:
   compact structures;
 - **a notch at a quarter of the sample rate**, which removes the chirp that updating the geometry every
   few samples leaves on consonants;
-- **cleanup for the shortcuts**, measured against the 4x reference on the beatbox sounds: closures eased
-  in four steps and the tongue kept out of the palate between shape updates (the click before a hit drops
-  from 9 dB to 28 dB under the hit), the breath noise at its designed level at any sample rate (no extra
-  hiss), a cut of 10 dB at 10.3 kHz where the airway whistles, and a zero at the top of the spectrum.
-  Together they cost under 1 % more work;
+- **cleanup for the shortcuts**: closures eased in four steps and the tongue kept out of the palate
+  between shape updates (the click before a beatbox hit drops from 9 dB to 28 dB under the hit), for
+  under 1 % more work;
+- **a tone for each kind of sound**, since the airway without oversampling loses its top octave. Sing,
+  Play and Speak get a high shelf from 11.5 kHz and cuts that keep the chirp out, fitted to the desktop
+  plugin: their spectrum from 4 to 16 kHz comes within 2 dB of it on average, where it was 8 dB darker.
+  Beatbox keeps a darker tone (10 dB off at 10.3 kHz, quieter breath noise), because the shelf would
+  bring back the click before each hit;
 - **profile-guided optimization**: the compiler lays the 32-bit engine out from a recording of which
   code paths run while it plays every mode, with the same samples coming out.
 
