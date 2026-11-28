@@ -362,6 +362,9 @@ pub struct ChimeraMpc {
     pads: [Pad; 3],
     singer: Singer,
     hub: Arc<Hub>,
+    /// the worker thread, joined when the engine is freed (it runs code in this library: the host
+    /// may unload the library right after closing the plugin)
+    worker: Option<std::thread::JoinHandle<()>>,
     /// what goes back to the worker to be freed, while the trash is locked (room reserved)
     to_trash: Vec<Trash>,
     /// each slot's syllables once ready (moved in, never freed here)
@@ -469,8 +472,9 @@ impl ChimeraMpc {
         drop(male);
         let base_gain = engine.voice().output_gain;
         let hub = Hub::new();
-        worker::start(hub.clone(), fs, content, texts.clone());
+        let worker = worker::start(hub.clone(), fs, content, texts.clone());
         let mut e = ChimeraMpc {
+            worker,
             engine,
             fs,
             voices: [None, Some(mpc_voice(fs, BODIES[1])), Some(mpc_voice(fs, BODIES[2]))],
@@ -561,7 +565,6 @@ impl ChimeraMpc {
 
     /// Play `voice` (built for `what`); the voice it replaces goes back to its slot or out.
     fn install(&mut self, mut voice: Box<HumanVoice>, what: Playing) {
-        self.stop_notes();
         let mix = match what {
             Playing::Preset(b) => BODIES[b],
             Playing::Blend((f, c)) => BodyMix::new(f as f64, c as f64),
@@ -571,6 +574,32 @@ impl ChimeraMpc {
         self.engine.install_voice(&mut voice, mix);
         self.base_gain = self.engine.voice().output_gain;
         self.engine.voice_mut().output_gain = self.base_gain * self.gain_now;
+        // what is sounding carries on in the new voice (a Blend arrives whenever the worker has
+        // built it, in the middle of a held note): the old score's gestures move onto the new
+        // clock, so a held Sing note, a hum, a line being said and its tags (a key's release)
+        // all continue. While the sequencer runs it schedules its own hits again (install_voice),
+        // so the old score's hits not yet begun stay behind.
+        let delta = self.engine.voice().clock - voice.clock;
+        let now = voice.clock;
+        let beat_runs = {
+            let b = self.engine.beat();
+            b.playing || b.following()
+        };
+        let incoming = self.engine.voice_mut();
+        for g in voice.score.gestures() {
+            if g.end() <= now || (beat_runs && g.tag.is_none() && now < g.t0 - g.ramp_in) {
+                continue;
+            }
+            let mut g = *g;
+            g.t0 += delta;
+            g.t1 += delta;
+            incoming.score.add(g);
+        }
+        self.singer.rebase(delta);
+        // Play: the held key's pitch (install_voice starts the new voice at the body's own)
+        if self.mode == MODE_PLAY && self.n_keys > 0 {
+            self.engine.set_source(&SourcePatch::f0(midi_to_hz(self.keys[self.n_keys - 1] as f64)));
+        }
         // the new voice's clock starts at zero: the beat's hits are looked at from there
         self.hit_clock = self.engine.clock();
         // the outgoing voice is parked (a preset) or thrown out (a blend): what it still had
@@ -1387,7 +1416,12 @@ impl ChimeraMpc {
 
 impl Drop for ChimeraMpc {
     fn drop(&mut self) {
+        // cm_free runs off the audio thread: wait for the worker to finish its step (it looks at
+        // `quit` between steps), so none of its code runs after the library may be unloaded
         self.hub.quit.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(w) = self.worker.take() {
+            let _ = w.join();
+        }
     }
 }
 
@@ -1431,6 +1465,32 @@ pub fn drum_pad(midi: u8) -> Option<&'static str> {
         46 => "tss",
         49 | 52 | 55 | 57 => "kch",
         _ => return None,
+    })
+}
+
+/// A beat preset, worked out once (parse_beat allocates): its steps as parameter values, tempo,
+/// swing, hum notes and accents.
+struct PresetTable {
+    steps: [f32; STEPS],
+    bpm: f32,
+    swing: f32,
+    notes: [f32; STEPS],
+    accents: [f32; STEPS],
+}
+
+static PRESET_TABLES: std::sync::OnceLock<Vec<PresetTable>> = std::sync::OnceLock::new();
+
+/// Every beat preset's table. Filled by cm_new (outside the audio callback), so the audio thread
+/// only reads it.
+fn preset_tables() -> &'static [PresetTable] {
+    PRESET_TABLES.get_or_init(|| {
+        (0..BEAT_PRESETS.len())
+            .map(|i| {
+                let (steps, bpm, swing) = preset_steps(i).unwrap_or(([0.0; STEPS], 96.0, 0.0));
+                let (notes, accents) = preset_notes(i).unwrap_or(([0.0; STEPS], [0.0; STEPS]));
+                PresetTable { steps, bpm, swing, notes, accents }
+            })
+            .collect()
     })
 }
 
@@ -1631,7 +1691,12 @@ pub extern "C" fn cm_new(sample_rate: f64, content_dir: *const c_char, texts: *c
     // SAFETY: a NUL-terminated string from the plugin, or null
     let content = (!content_dir.is_null()).then(|| unsafe { CStr::from_ptr(content_dir) }.to_string_lossy().into_owned());
     let bank = bank_of(texts).unwrap_or_else(texts::new_bank);
-    catch_unwind(AssertUnwindSafe(|| Box::into_raw(Box::new(ChimeraMpc::new(sample_rate, content, bank))))).unwrap_or(std::ptr::null_mut())
+    catch_unwind(AssertUnwindSafe(|| {
+        // the beat presets' tables, here and not on the audio thread (cm_beat_preset reads them)
+        preset_tables();
+        Box::into_raw(Box::new(ChimeraMpc::new(sample_rate, content, bank)))
+    }))
+    .unwrap_or(std::ptr::null_mut())
 }
 
 /// Frees an engine from cm_new (null is fine). Call it outside the audio callback.
@@ -1700,7 +1765,7 @@ pub extern "C" fn cm_beat_preset(index: i32, steps16: *mut f32, bpm: *mut f32, s
     if steps16.is_null() || bpm.is_null() || swing.is_null() || index < 0 {
         return 0;
     }
-    match catch_unwind(|| preset_steps(index as usize)) {
+    match catch_unwind(|| preset_tables().get(index as usize).map(|t| (t.steps, t.bpm, t.swing))) {
         Ok(Some((s, b, w))) => {
             // SAFETY: the caller gives room for 16 values and one each
             unsafe {
@@ -1721,7 +1786,7 @@ pub extern "C" fn cm_beat_preset_notes(index: i32, notes16: *mut f32, accents16:
     if notes16.is_null() || accents16.is_null() || index < 0 {
         return 0;
     }
-    match catch_unwind(|| preset_notes(index as usize)) {
+    match catch_unwind(|| preset_tables().get(index as usize).map(|t| (t.notes, t.accents))) {
         Ok(Some((n, a))) => {
             // SAFETY: the caller gives room for 16 values each
             unsafe {

@@ -1511,3 +1511,71 @@ fn learn_all_maps_any_pad_layout_and_custom_plays_it() {
         assert_eq!(lit[0], i as i32 + 1, "note {n} plays square {}", i + 1);
     }
 }
+
+/// Audit 2026-11-27: with Body = Blend, a Female or Child change builds a voice that arrives
+/// mid-note; it cut a held Play key and a held Sing note (silent until the next key). The note
+/// now carries on in the new voice.
+#[test]
+fn a_blend_arriving_mid_note_keeps_the_note_sounding() {
+    for mode in [1.0f32, 0.0] {
+        let mut r = Rig::new();
+        r.set(p::MODE, mode);
+        r.set(p::BODY, 3.0);
+        r.set(p::BODY_FEMALE, 0.5);
+        r.wait_for_lyrics();
+        assert!(r.wait_for_body(10), "the first blend never arrived");
+        cm_note_on(r.h, 60, 100);
+        r.render(0.5);
+        // a small turn of Female, the key still held: keep rendering until the new voice is in
+        r.set(p::BODY_FEMALE, 0.6);
+        assert!(r.wait_for_body(10), "the second blend never arrived");
+        r.out.clear();
+        r.render(0.3);
+        let held = rms(&r.out);
+        cm_note_off(r.h, 60);
+        r.render(0.6);
+        r.out.clear();
+        r.render(0.3);
+        let after = rms(&r.out);
+        eprintln!("mode {mode}: held after the blend {held:.4}, after release {after:.4}");
+        assert!(held > 0.02, "mode {mode}: the held note went quiet when the blend arrived ({held:.4})");
+        assert!(after < held * 0.2, "mode {mode}: the note did not end at its release ({after:.4} vs {held:.4})");
+        assert_eq!(cm_failed(r.h), 0);
+    }
+}
+
+/// Audit 2026-11-27: the plugin asks for a beat preset's steps and notes on the audio thread;
+/// they come from tables made in cm_new (parse_beat allocated there before).
+#[test]
+fn beat_presets_come_from_tables() {
+    let r = Rig::new();
+    let (mut steps, mut bpm, mut swing) = ([0.0f32; 16], 0.0f32, 0.0f32);
+    let (mut notes, mut accents) = ([0.0f32; 16], [0.0f32; 16]);
+    for i in 0..7 {
+        assert_eq!(cm_beat_preset(i, steps.as_mut_ptr(), &mut bpm, &mut swing), 1);
+        assert_eq!(cm_beat_preset_notes(i, notes.as_mut_ptr(), accents.as_mut_ptr()), 1);
+        let (s, b, w) = preset_steps(i as usize).unwrap();
+        let (n, a) = preset_notes(i as usize).unwrap();
+        assert_eq!((steps, bpm, swing, notes, accents), (s, b, w, n, a));
+    }
+    assert_eq!(cm_beat_preset(99, steps.as_mut_ptr(), &mut bpm, &mut swing), 0);
+    drop(r);
+}
+
+/// Audit 2026-11-27: cm_free returned while the worker thread still ran code in the library (for
+/// seconds just after cm_new, while it plans); a host that unloads the library right after closing
+/// crashed. cm_free now waits for it, and it stops between its steps.
+#[test]
+fn freeing_the_engine_waits_for_its_worker() {
+    for wait_ms in [0u64, 5, 50, 300] {
+        let dir = CString::new(content_dir()).unwrap();
+        let h = cm_new(FS, dir.as_ptr(), std::ptr::null());
+        assert!(!h.is_null());
+        std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+        let t = std::time::Instant::now();
+        cm_free(h);
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("freed {wait_ms} ms after cm_new: cm_free took {ms:.0} ms");
+        assert!(ms < 3000.0, "cm_free waited {ms:.0} ms for the worker");
+    }
+}

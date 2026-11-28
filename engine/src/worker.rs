@@ -95,10 +95,14 @@ impl Hub {
     }
 }
 
-pub fn start(hub: Arc<Hub>, fs: f64, content: Option<String>, texts: Texts) {
-    let _ = std::thread::Builder::new().name("chimera-worker".into()).spawn(move || {
-        let _ = catch_unwind(AssertUnwindSafe(|| run(&hub, fs, content.as_deref(), &texts)));
-    });
+/// The worker thread, for the engine to join when it is freed (None if it could not start).
+pub fn start(hub: Arc<Hub>, fs: f64, content: Option<String>, texts: Texts) -> Option<std::thread::JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name("chimera-worker".into())
+        .spawn(move || {
+            let _ = catch_unwind(AssertUnwindSafe(|| run(&hub, fs, content.as_deref(), &texts)));
+        })
+        .ok()
 }
 
 fn read_text(content: Option<&str>, name: &str) -> String {
@@ -223,28 +227,38 @@ fn plan_lyrics(slots: &[String], g2p: &EnglishG2P) -> (Lyrics, SylTexts) {
         .unzip()
 }
 
-fn plan_speech(slots: &[Vec<String>], g2p: &EnglishG2P, rate: f64, ipa: bool) -> Speech {
+/// None when `quit` was raised part of the way (the engine is being freed).
+fn plan_speech(slots: &[Vec<String>], g2p: &EnglishG2P, rate: f64, ipa: bool, quit: &AtomicBool) -> Option<Speech> {
+    let quitting = || quit.load(Ordering::Relaxed);
     let pads = CONSONANTS
         .iter()
         .map(|c| {
+            if quitting() {
+                return None;
+            }
             let per_vowel = |v: &str| {
                 let say = format!("ˈ{v}{c}{v}");
                 [plan_pad(&say, BODIES[0], rate), plan_pad(&say, BODIES[1], rate), plan_pad(&say, BODIES[2], rate)]
             };
-            [per_vowel(PAD_VOWELS[0]), per_vowel(PAD_VOWELS[1]), per_vowel(PAD_VOWELS[2]), per_vowel(PAD_VOWELS[3])]
+            Some([per_vowel(PAD_VOWELS[0]), per_vowel(PAD_VOWELS[1]), per_vowel(PAD_VOWELS[2]), per_vowel(PAD_VOWELS[3])])
         })
-        .collect();
+        .collect::<Option<Vec<_>>>()?;
     let (lines, texts) = slots
         .iter()
         .map(|lines| {
+            if quitting() {
+                return None;
+            }
             // the lines with something to say, and their texts (kept in step for the screen)
             let (phrases, texts): (Vec<Vec<Phrase>>, Vec<String>) =
                 lines.iter().map(|l| (if ipa { ipa_phrases(l) } else { g2p.to_phrases(l) }, l.clone())).filter(|(p, _)| !p.is_empty()).unzip();
             let per_body = |b: usize| phrases.iter().map(|p| plan_line(p, BODIES[b], rate)).collect::<Vec<_>>();
-            ([per_body(0), per_body(1), per_body(2)], texts)
+            Some(([per_body(0), per_body(1), per_body(2)], texts))
         })
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
         .unzip();
-    Speech { lines, pads, texts }
+    Some(Speech { lines, pads, texts })
 }
 
 fn run(hub: &Hub, fs: f64, content: Option<&str>, texts: &Texts) {
@@ -267,10 +281,22 @@ fn run(hub: &Hub, fs: f64, content: Option<&str>, texts: &Texts) {
         }
         b.filled = true;
     }
+    // (the engine may be freed while this starts up: `quit` is looked at between the steps)
+    let quitting = || hub.quit.load(Ordering::Relaxed);
+    if quitting() {
+        return;
+    }
     let g2p = load_g2p(content);
+    if quitting() {
+        return;
+    }
     let (lyric_text, mut lyrics_gen) = bank_texts(texts, TARGET_LYRICS);
+    let lyrics = plan_lyrics(&lyric_text, &g2p);
+    if quitting() {
+        return;
+    }
     if let Ok(mut o) = hub.out.lock() {
-        o.lyrics = Some(plan_lyrics(&lyric_text, &g2p));
+        o.lyrics = Some(lyrics);
     }
     let (speech_text, mut speech_gen) = bank_texts(texts, TARGET_SPEECH);
     let mut speech_text = speech_lines(&speech_text);
@@ -313,7 +339,7 @@ fn run(hub: &Hub, fs: f64, content: Option<&str>, texts: &Texts) {
         let req = hub.request.lock().ok().and_then(|r| *r);
         if let Some(r) = req {
             if built_speech != Some((r.speech_rate, r.ipa)) {
-                let s = plan_speech(&speech_text, &g2p, r.speech_rate as f64, r.ipa);
+                let Some(s) = plan_speech(&speech_text, &g2p, r.speech_rate as f64, r.ipa, &hub.quit) else { return };
                 built_speech = Some((r.speech_rate, r.ipa));
                 // an unclaimed older plan is replaced (and freed) here
                 if let Ok(mut o) = hub.out.lock() {
@@ -327,6 +353,7 @@ fn run(hub: &Hub, fs: f64, content: Option<&str>, texts: &Texts) {
             }
             if let Some(mix) = r.blend
                 && built_blend != Some(mix)
+                && !quitting()
             {
                 let v = mpc_voice(fs, BodyMix::new(mix.0 as f64, mix.1 as f64));
                 built_blend = Some(mix);

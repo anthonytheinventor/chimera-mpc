@@ -396,10 +396,25 @@ public:
         const int step = (int)std::lround(plainValue);
         const int was = tapLast_[tapSlot(index)].exchange(step, std::memory_order_acq_rel);
         if (step < 1 || step == was) return;
+        // a program or state being loaded sets the momentary controls to what was saved: no taps
+        // (beginLoad runs on this same thread, before the first value)
+        if (loadsActive_.load(std::memory_order_acquire) > 0) return;
         const uint32_t w = tapWrite_.fetch_add(1, std::memory_order_acq_rel);
-        // a full queue drops the tap rather than overwrite one not yet taken
+        // a full queue drops the tap rather than overwrite one not yet taken. The slot carries
+        // its place's lap (tapTag), so the reader can tell a tap for this place from one still
+        // being written or one left from an earlier lap
         int32_t empty = 0;
-        tapQueue_[w % kTapQueue].compare_exchange_strong(empty, (int32_t)((index << 8) | step), std::memory_order_release);
+        tapQueue_[w % kTapQueue].compare_exchange_strong(empty, (tapTag(w) << 16) | (int32_t)((index << 8) | step), std::memory_order_release);
+    }
+
+    // A program or a state is being written (the dispatcher's thread; see chimeraDispatcher):
+    // process() leaves alone what follows the user's moves (the vowel pad, Beat, the slots, Learn,
+    // the typing cursor) until it has been written in full, then takes the values as they are.
+    void beginLoad() { loadsActive_.fetch_add(1, std::memory_order_acq_rel); }
+    void endLoad()
+    {
+        loadsDone_.fetch_add(1, std::memory_order_release);   // before the count drops: a block
+        loadsActive_.fetch_sub(1, std::memory_order_acq_rel);  // that sees no load sees this one done
     }
 
     // The text box's two rows (the slot around its cursor), as Typed's and Typed 2's text, and the
@@ -457,23 +472,16 @@ public:
         cm_free(old);
     }
 
-    // On resume and after a state load: every note off (done by process(), on the audio thread).
+    // On resume and after a state load: every note off, the values taken as they are, the taps
+    // queued so far dropped. It may come on the dispatcher's thread while a block runs (resume),
+    // so it only raises flags: process() does the work, on the audio thread.
     void reset() override
     {
         allOff_.store(true, std::memory_order_release);
         // a loaded state or program must not act as a tap on the momentary controls (process)
         settle_.store(true, std::memory_order_release);
-        padSeen_ = false;
-        beatSeen_ = false;
-        slotsSeen_ = false;
-        learnSeen_ = false;
-        lastTyping_ = -1;   // a load's slot and cursor are taken as they are
         hitDark_.store(true, std::memory_order_release);   // the helper thread darkens the pads
-        // a state load sets the momentary controls too (to whatever was saved): those are not taps.
-        // reset() runs before the next block after a load (or on resume), so the queue is cleared
-        // of them here
-        tapRead_ = tapWrite_.load(std::memory_order_acquire);
-        for (std::atomic<int32_t>& t : tapQueue_) t.store(0, std::memory_order_relaxed);
+        resetPending_.store(true, std::memory_order_release);
     }
 
     void process(mpc::ProcessContext& ctx) override
@@ -486,11 +494,22 @@ public:
             return;   // outputs are already zeroed
         }
         if (allOff_.exchange(false, std::memory_order_acq_rel)) cm_all_notes_off(e);
+        // a reset, or a program or state written (or being written): what follows the user's moves
+        // takes the values as they are, and the taps queued so far go
+        const bool loading = loadsActive_.load(std::memory_order_acquire) > 0;
+        const uint32_t loadsDone = loadsDone_.load(std::memory_order_acquire);
+        if (resetPending_.exchange(false, std::memory_order_acq_rel) || loadsDone != loadsDoneSeen_ || (loading && !wasLoading_))
+            takeAsTheyAre();
+        loadsDoneSeen_ = loadsDone;
+        wasLoading_ = loading;
 
-        followVowelPad(e);
-        followBeatPreset();
-        followSlots();
-        followLearn();
+        if (!loading)
+        {
+            followVowelPad(e);
+            followBeatPreset();
+            followSlots();
+            followLearn();
+        }
         // the squares' hum notes and accents (the engine applies them when they change)
         float stepNotes[16], stepAccents[16];
         for (int i = 0; i < 16; ++i)
@@ -527,19 +546,9 @@ public:
         if (settle_.exchange(false, std::memory_order_acq_rel)) cm_settle(e);
         // the typing cursor: back to the end when another slot (or Sing / Speak) is picked
         const int typing = getInt(kTypeInto) * 16 + getInt(kTypeSlot);
-        if (typing != lastTyping_) { if (lastTyping_ >= 0) set(kCursor, (float)kCursorEnd); lastTyping_ = typing; }
+        if (!loading && typing != lastTyping_) { if (lastTyping_ >= 0) set(kCursor, (float)kCursorEnd); lastTyping_ = typing; }
         cm_text_cursor(e, kCursorEnd - getInt(kCursor));
-        // the taps caught since the last block, in order
-        // (the reader follows the write count: a slot left empty, by a tap dropped from a full
-        // queue, is passed over instead of holding up the ones after it)
-        const uint32_t written = tapWrite_.load(std::memory_order_acquire);
-        if (written - tapRead_ > (uint32_t)kTapQueue) tapRead_ = written - kTapQueue;
-        while (tapRead_ != written)
-        {
-            const int32_t t = tapQueue_[tapRead_ % kTapQueue].exchange(0, std::memory_order_acquire);
-            ++tapRead_;
-            if (t != 0) cm_tap(e, t >> 8, t & 0xFF);
-        }
+        drainTaps(e);
 
         const int numFrames = ctx.numFrames;
         float* outL = ctx.outputs[0];
@@ -595,7 +604,7 @@ public:
         int learn[18] = {-1};
         cm_pad_learn(e, learn);
         learnNext_.store(learn[0], std::memory_order_relaxed);
-        if (learn[0] == 16 && getInt(kPadNotes) == kPadLearnAll)
+        if (!loading && learn[0] == 16 && getInt(kPadNotes) == kPadLearnAll)
         {
             for (int i = 0; i < 16; ++i) set(kPadMap1 + i, (float)learn[2 + i]);
             set(kPadNotes, (float)kPadCustom);
@@ -605,7 +614,7 @@ public:
         int notes[3] = {-1, 0, -1};
         cm_pad_notes(e, notes);
         lastNote_.store(notes[0], std::memory_order_relaxed);
-        if (notes[2] >= 0 && getInt(kPadNotes) == kPadLearn)
+        if (!loading && notes[2] >= 0 && getInt(kPadNotes) == kPadLearn)
         {
             set(kPadNotes, (float)notes[2]);
             padLearned_.store(true, std::memory_order_release);
@@ -615,6 +624,49 @@ public:
     }
 
 private:
+    // After a reset or a load (the audio thread): the next look at the vowel pad, Beat, the slots,
+    // Learn and the typing slot takes their values as they are, and the queued taps are dropped.
+    void takeAsTheyAre()
+    {
+        padSeen_ = false;
+        beatSeen_ = false;
+        slotsSeen_ = false;
+        learnSeen_ = false;
+        lastTyping_ = -1;
+        tapRead_ = tapWrite_.load(std::memory_order_acquire);
+        for (std::atomic<int32_t>& t : tapQueue_) t.store(0, std::memory_order_relaxed);
+        tapWaits_ = 0;
+    }
+
+    // The taps caught since the last block, in order. A place whose slot does not hold its own tap
+    // yet is a tap still being written on another thread: it gets a couple of blocks. After that
+    // it was dropped (a full queue) and is passed over, with whatever late tap from an earlier lap
+    // sits in its slot, so nothing comes back a lap later.
+    static constexpr int kTapPatience = 3;
+    static int32_t tapTag(uint32_t w) { return (int32_t)(((w / (uint32_t)kTapQueue) & 0x3FFFu) + 1u); }
+    void drainTaps(ChimeraMpc* e)
+    {
+        const uint32_t written = tapWrite_.load(std::memory_order_acquire);
+        if (written - tapRead_ > (uint32_t)kTapQueue) { tapRead_ = written - kTapQueue; tapWaits_ = 0; }
+        while (tapRead_ != written)
+        {
+            std::atomic<int32_t>& slot = tapQueue_[tapRead_ % kTapQueue];
+            int32_t t = slot.load(std::memory_order_acquire);
+            if (t != 0 && (t >> 16) == tapTag(tapRead_))
+            {
+                slot.store(0, std::memory_order_relaxed);   // (a writer only fills an empty slot)
+                ++tapRead_;
+                tapWaits_ = 0;
+                cm_tap(e, (t >> 8) & 0xFF, t & 0xFF);
+                continue;
+            }
+            if (++tapWaits_ < kTapPatience) break;
+            if (t != 0) slot.compare_exchange_strong(t, 0, std::memory_order_relaxed);
+            ++tapRead_;
+            tapWaits_ = 0;
+        }
+    }
+
     // A text (the WORDS preview, Now / Next) crosses from the audio thread to the host's: a
     // sequence lock (the writer never waits; a reader that catches a write in progress reads
     // again). `writes` counts the writes, for the helper thread to see a new text.
@@ -993,6 +1045,12 @@ private:
     std::atomic<int32_t> tapQueue_[kTapQueue] = {};
     std::atomic<uint32_t> tapWrite_{0};
     uint32_t tapRead_ = 0;   // the audio thread's
+    int tapWaits_ = 0;       // the audio thread's: blocks the reader has waited at tapRead_
+    std::atomic<bool> resetPending_{false};
+    std::atomic<int> loadsActive_{0};
+    std::atomic<uint32_t> loadsDone_{0};
+    uint32_t loadsDoneSeen_ = 0;   // the audio thread's
+    bool wasLoading_ = false;      // the audio thread's
     std::atomic<int> tapLast_[4] = {};
     std::atomic<int> velumFrame_{0}, hitPad_{0}, hitCount_{0}, stepPad_{0}, stepCount_{0}, lastNote_{-1};
     std::atomic<bool> padLearned_{false};
@@ -1027,4 +1085,23 @@ private:
     float buf_[kChunk] = {};
 };
 
-MPC_PLUGIN_ENTRY(CHIMERAMPC)
+// The framework's dispatcher, with a program or state load bracketed by beginLoad / endLoad so the
+// audio thread takes in none of its values part of the way through (see beginLoad).
+static VstIntPtr chimeraDispatcher(AEffect* e, VstInt32 opcode, VstInt32 index, VstIntPtr value, void* ptr, float opt)
+{
+    CHIMERAMPC* p = e != nullptr ? static_cast<CHIMERAMPC*>(static_cast<mpc::Plugin*>(e->object)) : nullptr;
+    if (p == nullptr || (opcode != effSetProgram && opcode != effSetChunk)) return mpc::detail::dispatcher(e, opcode, index, value, ptr, opt);
+    p->beginLoad();
+    const VstIntPtr result = mpc::detail::dispatcher(e, opcode, index, value, ptr, opt);
+    p->endLoad();
+    return result;
+}
+
+// The exported entry point: MPC_PLUGIN_ENTRY of the framework, with the dispatcher above. Keep it last.
+extern "C" MPC_EXPORT AEffect* VSTPluginMain(audioMasterCallback host)
+{
+    if (host != nullptr && host(nullptr, audioMasterVersion, 0, 0, nullptr, 0.0f) == 0) return nullptr;   // VST1-only host
+    AEffect* e = mpc::detail::createEffect(new CHIMERAMPC(), host);
+    if (e != nullptr) e->dispatcher = &chimeraDispatcher;
+    return e;
+}
