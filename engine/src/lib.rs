@@ -1643,6 +1643,18 @@ pub extern "C" fn cm_texts_save(t: *const TextBankHandle, out: *mut u8, cap: i32
     .unwrap_or(0)
 }
 
+/// The slots' size (characters) of the build that saved these texts: 600 for a build from before
+/// it was recorded, 0 if the data is not ours. The plugin's Cursor steps follow it (any thread).
+#[unsafe(no_mangle)]
+pub extern "C" fn cm_texts_saved_cap(data: *const u8, len: i32) -> i32 {
+    if data.is_null() || len <= 0 {
+        return 0;
+    }
+    // SAFETY: the caller gives len bytes
+    let d = unsafe { std::slice::from_raw_parts(data, len as usize) };
+    catch_unwind(|| texts::TextBank::saved_cap(d) as i32).unwrap_or(0)
+}
+
 /// A project's typed texts (as cm_texts_save wrote them). Returns 1 if they were ours. The host's
 /// thread (it may wait); the engine plans them again after the usual pause.
 #[unsafe(no_mangle)]

@@ -26,6 +26,9 @@ const void* cm_texts_new(void);
 void cm_texts_free(const void* texts);
 int cm_texts_save(const void* texts, uint8_t* out, int cap);
 int cm_texts_load(const void* texts, const uint8_t* data, int len);
+// The slots' size (characters) of the build that saved these texts: 600 before it was recorded,
+// 0 if they are not ours (the Cursor parameter's steps follow it).
+int cm_texts_saved_cap(const uint8_t* data, int len);
 // The typed slot's end ("_" for the cursor) into out (NUL-terminated); returns a serial that
 // moves whenever it changes. The audio thread.
 uint32_t cm_text_preview(ChimeraMpc* engine, uint8_t* out, int cap);

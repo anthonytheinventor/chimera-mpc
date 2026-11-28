@@ -10,8 +10,15 @@
 use crate::SLOTS;
 use std::sync::{Arc, Mutex};
 
-/// Bytes a slot holds (UTF-8; typed keys are ASCII).
-pub const TEXT_CAP: usize = 600;
+/// Bytes a slot holds (UTF-8; typed keys are ASCII). The plugin's Cursor parameter has a step
+/// for each (kCursorEnd), so a project records this in its saved texts (see `save`).
+pub const TEXT_CAP: usize = 1024;
+/// The slots' size before 1024: a project whose saved texts record no size was saved with it.
+pub const OLD_TEXT_CAP: usize = 600;
+/// A saved record that is not a slot: its target byte (older builds stop reading at it, so it goes
+/// last), then the kind, the length and the value.
+const RECORD_INFO: u8 = 0xFF;
+const INFO_TEXT_CAP: u8 = 1;
 pub const TARGET_SPEECH: usize = 0;
 pub const TARGET_LYRICS: usize = 1;
 
@@ -198,7 +205,8 @@ impl TextBank {
         len
     }
 
-    /// The typed slots, for the project: "CMT1", then per slot target, slot, length (u16 LE), text.
+    /// The typed slots, for the project: "CMT1", then per slot target, slot, length (u16 LE), text;
+    /// last, the slots' size (TEXT_CAP) as an info record, which builds from before it skip.
     pub fn save(&self) -> Vec<u8> {
         let mut out = b"CMT1".to_vec();
         for t in 0..2 {
@@ -212,7 +220,31 @@ impl TextBank {
                 }
             }
         }
+        out.extend_from_slice(&[RECORD_INFO, INFO_TEXT_CAP, 2, 0]);
+        out.extend_from_slice(&(TEXT_CAP as u16).to_le_bytes());
         out
+    }
+
+    /// The slots' size the build that saved `data` had (OLD_TEXT_CAP when it records none), or 0 if
+    /// the data is not ours.
+    pub fn saved_cap(data: &[u8]) -> usize {
+        if data.len() < 4 || &data[..4] != b"CMT1" {
+            return 0;
+        }
+        let mut i = 4;
+        while i + 4 <= data.len() {
+            let (t, kind) = (data[i], data[i + 1]);
+            let n = u16::from_le_bytes([data[i + 2], data[i + 3]]) as usize;
+            i += 4;
+            if i + n > data.len() {
+                break;
+            }
+            if t == RECORD_INFO && kind == INFO_TEXT_CAP && n == 2 {
+                return u16::from_le_bytes([data[i], data[i + 1]]) as usize;
+            }
+            i += n;
+        }
+        OLD_TEXT_CAP
     }
 
     /// A project's typed slots (as `save` wrote them); the slots it did not type into go back to
@@ -235,6 +267,10 @@ impl TextBank {
             let (t, s) = (data[i] as usize, data[i + 1] as usize);
             let n = u16::from_le_bytes([data[i + 2], data[i + 3]]) as usize;
             i += 4;
+            if i + n <= data.len() && data[i - 4] == RECORD_INFO {
+                i += n; // an info record (the slots' size): not a slot
+                continue;
+            }
             if i + n > data.len() || t > 1 || s >= SLOTS {
                 break;
             }

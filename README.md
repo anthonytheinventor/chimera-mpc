@@ -190,7 +190,7 @@ sings) and **Type Slot** (1 to 8), then type on the keyboard.
 | **Line** | For Speak, starts a new line: each note says the next line. |
 
 - The slot starts with the line from the text file. What you type replaces it and is saved with the
-  project.
+  project. A slot holds up to 1024 characters.
 - A moment after you stop typing, the next note says (or sings) the new words. **Speak** says the next
   line without a key.
 - The text box shows two rows of the text around the cursor (each row up to 30 characters, broken at

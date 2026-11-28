@@ -173,7 +173,7 @@ constexpr int kLookMs = 50;        // the helper thread looks this often
 constexpr int kKnobLooks = 6;      // and stays quiet this many looks after a setting moves
 constexpr int kHitLooks = 3;       // a hit's pad stays lit this many looks (about 150 ms)
 // the typing cursor's steps: kCursorEnd at the end, each step down one character further back
-constexpr int kCursorEnd = 600;   // engine/src/texts.rs TEXT_CAP (a slot's most characters)
+constexpr int kCursorEnd = 1024;   // engine/src/texts.rs TEXT_CAP (a slot's most characters)
 constexpr int kResendEvery = 10;   // a new face frame is reported again every 10 looks (0.5 s)
 constexpr int kResendLooks = 60;   // for 60 looks (3 s) after it changed
 
@@ -455,6 +455,14 @@ public:
     void loadExtraState(const uint8_t* data, size_t size) override
     {
         cm_texts_load(texts_, data, (int)size);
+        // a project from a build whose slots held fewer characters saved Cursor with fewer steps
+        // ("End" was 600): the same place counted from the end
+        const int cap = cm_texts_saved_cap(data, (int)size);
+        if (cap > 0 && cap != kCursorEnd)
+        {
+            const int fromEnd = std::max(0, cap - getInt(kCursor));
+            set(kCursor, (float)std::max(0, kCursorEnd - fromEnd));
+        }
     }
 
     // Allocates the engine (outside the audio callback). A new one only when the rate changes.

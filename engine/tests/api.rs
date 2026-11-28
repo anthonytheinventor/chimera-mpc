@@ -437,10 +437,39 @@ fn typed_texts_survive_a_save_and_load() {
     let bank = cm_texts_new();
     let data = b"CMT1\x00\x02\x05\x00hello";
     assert_eq!(cm_texts_load(bank, data.as_ptr(), data.len() as i32), 1);
+    // (saved by a build from before the slots' size was recorded: 600 characters)
+    assert_eq!(cm_texts_saved_cap(data.as_ptr(), data.len() as i32), 600);
     let n = cm_texts_save(bank, std::ptr::null_mut(), 0);
     let mut out = vec![0u8; n as usize];
     assert_eq!(cm_texts_save(bank, out.as_mut_ptr(), n), n);
-    assert_eq!(&out, data);
+    // the same slot, then the slots' size (1024) as an info record
+    assert_eq!(&out, b"CMT1\x00\x02\x05\x00hello\xff\x01\x02\x00\x00\x04");
+    assert_eq!(cm_texts_saved_cap(out.as_ptr(), out.len() as i32), 1024);
+    // and it loads back the same (the info record is not a slot)
+    assert_eq!(cm_texts_load(bank, out.as_ptr(), out.len() as i32), 1);
+    let mut again = vec![0u8; n as usize];
+    assert_eq!(cm_texts_save(bank, again.as_mut_ptr(), n), n);
+    assert_eq!(again, out);
+    assert_eq!(cm_texts_saved_cap(b"nope".as_ptr(), 4), 0);
+    cm_texts_free(bank);
+}
+
+/// A slot holds 1024 characters (600 before): a longer text survives a save and load whole, and
+/// one longer still is cut at 1024.
+#[test]
+fn a_slot_holds_1024_characters() {
+    let bank = cm_texts_new();
+    let long: String = "la ".repeat(400); // 1200 characters
+    let mut data = b"CMT1\x01\x00".to_vec();
+    data.extend_from_slice(&(long.len() as u16).to_le_bytes());
+    data.extend_from_slice(long.as_bytes());
+    assert_eq!(cm_texts_load(bank, data.as_ptr(), data.len() as i32), 1);
+    let n = cm_texts_save(bank, std::ptr::null_mut(), 0);
+    let mut out = vec![0u8; n as usize];
+    cm_texts_save(bank, out.as_mut_ptr(), n);
+    let len = u16::from_le_bytes([out[6], out[7]]) as usize;
+    assert_eq!(len, 1024);
+    assert_eq!(&out[8..8 + len], &long.as_bytes()[..1024]);
     cm_texts_free(bank);
 }
 
